@@ -24,6 +24,31 @@ name: tianshu
 
 services:
   # ============================================================================
+  # Redis (高性能任务队列 - 可选)
+  # ============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: tianshu-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    environment:
+      - TZ=Asia/Shanghai
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - tianshu-network
+
+  # ============================================================================
   # RustFS Object Storage (S3 Compatible)
   # ============================================================================
   rustfs:
@@ -146,6 +171,7 @@ services:
     depends_on:
       - worker
       - rustfs
+      - redis
 
   # ============================================================================
   # LitServe Worker (统一版本 - 自动适配 GPU/CPU)
@@ -248,6 +274,7 @@ services:
 
     depends_on:
       - rustfs
+      - redis
 
   # ============================================================================
   # MCP Server (Model Context Protocol) - 可选
