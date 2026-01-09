@@ -26,10 +26,14 @@ services:
   # ============================================================================
   # Redis (高性能任务队列 - 可选)
   # ============================================================================
+  # 启动方式: docker-compose --profile redis up -d
+  # ============================================================================
   redis:
     image: redis:7-alpine
     container_name: tianshu-redis
     restart: unless-stopped
+    profiles:
+      - redis  # 使用 profile 实现可选启动
     ports:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
@@ -171,7 +175,7 @@ services:
     depends_on:
       - worker
       - rustfs
-      - redis
+      # redis 是可选依赖，不在 depends_on 中强制依赖
 
   # ============================================================================
   # LitServe Worker (统一版本 - 自动适配 GPU/CPU)
@@ -193,7 +197,7 @@ services:
       # 上传文件（读写，需要创建 converted_pdfs 目录用于 Office 转 PDF）
       - ./data/uploads:/app/uploads:rw
       # 输出结果
-      - ./data/output:/app/output:rw
+      - ./data/output:/app/data/output:rw
       # 日志
       - ./logs/worker:/app/logs:rw
       # 数据库（读写，需要更新任务状态）
@@ -274,7 +278,7 @@ services:
 
     depends_on:
       - rustfs
-      - redis
+      # redis 是可选依赖，不在 depends_on 中强制依赖
 
   # ============================================================================
   # MCP Server (Model Context Protocol) - 可选
