@@ -20,6 +20,7 @@ from loguru import logger
 
 try:
     import redis
+
     REDIS_AVAILABLE = True
 except ImportError:
     REDIS_AVAILABLE = False
@@ -29,6 +30,7 @@ except ImportError:
 @dataclass
 class RedisConfig:
     """Redis 配置"""
+
     host: str = "localhost"
     port: int = 6379
     db: int = 0
@@ -38,13 +40,13 @@ class RedisConfig:
     retry_on_timeout: bool = True
 
     # 队列配置
-    queue_key: str = "tianshu:task_queue"          # 优先级队列 (Sorted Set)
-    processing_key: str = "tianshu:processing"     # 处理中任务 (Set)
-    task_data_prefix: str = "tianshu:task:"        # 任务数据前缀 (Hash)
+    queue_key: str = "tianshu:task_queue"  # 优先级队列 (Sorted Set)
+    processing_key: str = "tianshu:processing"  # 处理中任务 (Set)
+    task_data_prefix: str = "tianshu:task:"  # 任务数据前缀 (Hash)
 
     # 超时配置
-    task_timeout_seconds: int = 3600               # 任务超时时间 (1小时)
-    claim_visibility_seconds: int = 300            # 任务可见性超时 (5分钟)
+    task_timeout_seconds: int = 3600  # 任务超时时间 (1小时)
+    claim_visibility_seconds: int = 300  # 任务可见性超时 (5分钟)
 
     @classmethod
     def from_env(cls) -> "RedisConfig":
@@ -146,12 +148,15 @@ class RedisTaskQueue:
             # 存储任务数据（可选，用于快速访问）
             if task_data:
                 task_key = f"{self.config.task_data_prefix}{task_id}"
-                pipe.hset(task_key, mapping={
-                    "task_id": task_id,
-                    "priority": str(priority),
-                    "enqueued_at": str(timestamp),
-                    "data": json.dumps(task_data),
-                })
+                pipe.hset(
+                    task_key,
+                    mapping={
+                        "task_id": task_id,
+                        "priority": str(priority),
+                        "enqueued_at": str(timestamp),
+                        "data": json.dumps(task_data),
+                    },
+                )
                 # 设置过期时间（任务超时后自动清理）
                 pipe.expire(task_key, self.config.task_timeout_seconds)
 
@@ -192,10 +197,12 @@ class RedisTaskQueue:
             _, task_id, _ = result
 
             # 将任务添加到 processing set（带时间戳）
-            processing_data = json.dumps({
-                "worker_id": worker_id,
-                "claimed_at": time.time(),
-            })
+            processing_data = json.dumps(
+                {
+                    "worker_id": worker_id,
+                    "claimed_at": time.time(),
+                }
+            )
             self.client.hset(self.config.processing_key, task_id, processing_data)
 
             logger.debug(f"📤 Task {task_id} claimed by worker {worker_id}")
@@ -285,10 +292,12 @@ class RedisTaskQueue:
             bool: 是否成功
         """
         try:
-            processing_data = json.dumps({
-                "worker_id": worker_id,
-                "claimed_at": time.time(),  # 更新时间
-            })
+            processing_data = json.dumps(
+                {
+                    "worker_id": worker_id,
+                    "claimed_at": time.time(),  # 更新时间
+                }
+            )
             self.client.hset(self.config.processing_key, task_id, processing_data)
             return True
         except Exception as e:
@@ -323,9 +332,7 @@ class RedisTaskQueue:
                     if now - claimed_at > timeout:
                         # 任务超时，重新入队
                         worker_id = data.get("worker_id", "unknown")
-                        logger.warning(
-                            f"⚠️  Task {task_id} timed out (worker: {worker_id}), requeuing..."
-                        )
+                        logger.warning(f"⚠️  Task {task_id} timed out (worker: {worker_id}), requeuing...")
 
                         # 从 processing 移除
                         self.client.hdel(self.config.processing_key, task_id)
@@ -427,8 +434,7 @@ def get_redis_queue() -> Optional[RedisTaskQueue]:
             _queue_instance = RedisTaskQueue()
             if _queue_instance.is_available():
                 logger.info(
-                    f"✅ Redis queue connected: "
-                    f"{_queue_instance.config.host}:{_queue_instance.config.port}"
+                    f"✅ Redis queue connected: " f"{_queue_instance.config.host}:{_queue_instance.config.port}"
                 )
             else:
                 logger.warning("⚠️  Redis queue not available, falling back to SQLite")
@@ -443,6 +449,7 @@ def get_redis_queue() -> Optional[RedisTaskQueue]:
 if __name__ == "__main__":
     # 测试代码
     import os
+
     os.environ["REDIS_QUEUE_ENABLED"] = "true"
 
     queue = get_redis_queue()
