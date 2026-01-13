@@ -192,6 +192,10 @@ async def submit_task(
     remove_watermark: bool = Form(False, description="是否启用水印去除（支持 PDF/图片）"),
     watermark_conf_threshold: float = Form(0.35, description="水印检测置信度阈值（0.0-1.0，推荐 0.35）"),
     watermark_dilation: int = Form(10, description="水印掩码膨胀大小（像素，推荐 10）"),
+    # 强制 MinerU 处理参数
+    force_mineru: bool = Form(
+        False, description="强制使用 MinerU 处理（将 Office 等文件转为 PDF，以提取文档内的图片）"
+    ),
     # 认证依赖
     current_user: User = Depends(require_permission(Permission.TASK_SUBMIT)),
 ):
@@ -235,6 +239,8 @@ async def submit_task(
             "remove_watermark": remove_watermark,
             "watermark_conf_threshold": watermark_conf_threshold,
             "watermark_dilation": watermark_dilation,
+            # 强制 MinerU 处理参数
+            "force_mineru": force_mineru,
         }
 
         # 创建任务（PDF 拆分逻辑由 Worker 处理）

@@ -524,6 +524,39 @@ class MinerUWorkerAPI(ls.LitAPI):
                     logger.warning(f"⚠️ [Preprocessing] Watermark removal failed: {e}, continuing with original file")
                     # 继续使用原文件处理
 
+            # 0.5 可选：强制 MinerU 处理 - 将 Office 文件转为 PDF
+            converted_pdf_path = None  # 用于后续清理
+            force_mineru = options.get("force_mineru", False)
+
+            # 定义可转换的 Office 文件扩展名
+            office_extensions = {".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt", ".html", ".odt", ".ods", ".odp", ".rtf"}
+
+            # force_mineru 仅对 Office 文件生效
+            if force_mineru and file_ext in office_extensions:
+                logger.info(f"🔄 [Force MinerU] Converting Office file {file_ext} to PDF for MinerU processing")
+
+                try:
+                    logger.info(f"🔄 [Force MinerU] Converting: {file_path}")
+                    converted_pdf_path = self._convert_to_pdf_for_mineru(file_path)
+
+                    # 更新 file_path 和 file_ext 指向转换后的 PDF
+                    file_path = converted_pdf_path
+                    file_ext = ".pdf"
+
+                    logger.info(f"✅ [Force MinerU] Converted to PDF: {converted_pdf_path}")
+
+                except Exception as e:
+                    logger.error(f"❌ [Force MinerU] Conversion failed: {e}")
+                    logger.info(f"↩️  [Force MinerU] Falling back to MarkItDown processing")
+                    # 转换失败，继续使用原文件和正常处理流程（会路由到 MarkItDown）
+
+            elif force_mineru and file_ext not in office_extensions and file_ext not in [".pdf", ".png", ".jpg", ".jpeg"]:
+                # 用户对非 Office、非 PDF/图片 文件设置了 force_mineru，给出提示
+                logger.warning(
+                    f"⚠️  [Force MinerU] force_mineru is only applicable to Office files. "
+                    f"Ignoring for {file_ext} file. Supported Office formats: {', '.join(sorted(office_extensions))}"
+                )
+
             # 统一的引擎路由逻辑：优先使用用户指定的 backend，否则自动选择
             result = None  # 初始化 result
 
@@ -637,6 +670,22 @@ class MinerUWorkerAPI(ls.LitAPI):
                 error_message=None,
             )
 
+            # 清理转换的 PDF 文件(如果有)
+            if converted_pdf_path:
+                try:
+                    Path(converted_pdf_path).unlink()
+                    logger.info(f"🗑️  [Force MinerU] Cleaned up converted PDF: {converted_pdf_path}")
+
+                    # 同时清理转换目录(如果为空)
+                    pdf_dir = Path(converted_pdf_path).parent
+                    if pdf_dir.exists() and pdf_dir.name == "converted_pdfs":
+                        # 检查目录是否为空
+                        if not any(pdf_dir.iterdir()):
+                            pdf_dir.rmdir()
+                            logger.info(f"🗑️  [Force MinerU] Removed empty directory: {pdf_dir}")
+                except Exception as e:
+                    logger.warning(f"⚠️  [Force MinerU] Failed to cleanup converted PDF: {e}")
+
             # 如果是子任务,检查是否需要触发合并
             if parent_task_id:
                 parent_id_to_merge = self.task_db.on_child_task_completed(task_id)
@@ -658,6 +707,15 @@ class MinerUWorkerAPI(ls.LitAPI):
                 clean_memory()
 
         except Exception as e:
+            # 清理转换的 PDF 文件(即使任务失败也要清理)
+            if converted_pdf_path:
+                try:
+                    if Path(converted_pdf_path).exists():
+                        Path(converted_pdf_path).unlink()
+                        logger.info(f"🗑️  [Force MinerU] Cleaned up converted PDF after error: {converted_pdf_path}")
+                except Exception as cleanup_error:
+                    logger.warning(f"⚠️  [Force MinerU] Failed to cleanup converted PDF after error: {cleanup_error}")
+
             # 更新任务状态为失败
             error_msg = f"{type(e).__name__}: {str(e)}"
             self.task_db.update_task_status(task_id=task_id, status="failed", result_path=None, error_message=error_msg)
@@ -857,6 +915,40 @@ class MinerUWorkerAPI(ls.LitAPI):
         normalize_output(output_dir)
 
         return {"result_path": str(output_dir), "content": result["markdown"]}
+
+    def _convert_to_pdf_for_mineru(self, file_path: str) -> str:
+        """
+        将 Office 文档转换为 PDF 以供 MinerU 处理
+
+        这个方法用于支持 force_mineru 参数,将 Office 文档转换为 PDF 后,
+        可以使用 MinerU 的高级功能(OCR、公式识别、表格识别等)处理文档中的图片。
+
+        Args:
+            file_path: 原始 Office 文件路径
+
+        Returns:
+            转换后的 PDF 文件路径
+
+        Raises:
+            RuntimeError: 转换失败时
+        """
+        from utils.office_converter import convert_office_to_pdf
+
+        # 创建转换后的 PDF 存储目录
+        pdf_dir = Path(file_path).parent / "converted_pdfs"
+        pdf_dir.mkdir(exist_ok=True)
+
+        # 生成输出 PDF 路径
+        pdf_path = pdf_dir / f"{Path(file_path).stem}.pdf"
+
+        logger.info(f"📄 Converting Office document to PDF for MinerU processing")
+        logger.info(f"   Input: {file_path}")
+        logger.info(f"   Output: {pdf_path}")
+
+        # 调用转换函数
+        result_path = convert_office_to_pdf(file_path, str(pdf_path), timeout=300)
+
+        return result_path
 
     def _preprocess_remove_watermark(self, file_path: str, options: dict) -> Path:
         """
@@ -1520,7 +1612,7 @@ if __name__ == "__main__":
     if devices == "auto":
         # 首先尝试从环境变量 CUDA_VISIBLE_DEVICES 读取（如果用户明确设置了）
         env_devices = os.getenv("CUDA_VISIBLE_DEVICES")
-        if env_devices:
+        if env_devices and env_devices.strip():
             devices = env_devices
             logger.info(f"📊 Using devices from CUDA_VISIBLE_DEVICES: {devices}")
         else:

@@ -263,6 +263,51 @@ mineru-server/
 └── Makefile               # 快捷命令
 ```
 
+---
+
+## 🏗️ 统一镜像架构
+
+Tianshu 采用**一个镜像，自动适配所有环境**的设计理念，无需用户选择 CPU 或 GPU 版本：
+
+### 核心特性
+
+```
+单一镜像：tianshu-backend:latest
+  │
+  ├─ 基于 NVIDIA CUDA 12.6.2
+  ├─ 包含 GPU 版本的 PyTorch 和 PaddlePaddle
+  │
+  └─ 启动时自动检测：
+      ├─ 有 GPU → 使用 GPU 模式（5-10x 速度）
+      └─ 无 GPU → 自动降级 CPU 模式
+```
+
+### 设计优势
+
+- 🎯 **智能适配**：自动检测 GPU，有则加速，无则 CPU 降级
+- ⚡ **GPU 加速**：如有 NVIDIA GPU，处理速度提升 5-10 倍
+- 🖥️ **CPU 兼容**：无 GPU 服务器也可正常运行
+- 📦 **统一镜像**：无需选择版本，一个镜像走天下
+- 🔄 **无缝切换**：同一镜像可在不同服务器间迁移
+- 🛠️ **简化维护**：只需维护一套代码和配置
+
+### 技术实现
+
+- **自动适配**: LitServe `accelerator="auto"` 智能检测设备
+- **GPU 隔离**: `CUDA_VISIBLE_DEVICES` 进程级 GPU 隔离
+- **智能降级**: PyTorch/PaddlePaddle 自动使用 CPU
+- **环境变量**: `DEVICE_MODE=auto|gpu|cpu` 灵活控制
+
+### 性能对比
+
+| 任务类型 | GPU 模式 | CPU 模式 | 加速比 |
+|---------|---------|---------|--------|
+| 10 页 PDF | 5-10 秒 | 30-60 秒 | 6x |
+| 100 页 PDF | 30-60 秒 | 5-10 分钟 | 8x |
+| 1 小时音频 | 1-2 分钟 | 10-15 分钟 | 7x |
+
+---
+
 ## 🚀 快速开始
 
 ### 方式一：Docker 部署（⭐ 推荐）
@@ -403,7 +448,317 @@ python start_all.py --enable-mcp  # MCP Server 端口 8002（默认）
 
 ## 🚢 生产部署
 
-推荐使用 Docker 部署。如需手动部署：
+### 离线部署（推荐）
+
+Tianshu 支持**完全离线部署**，提供两种部署模式：
+
+#### 方式 1：统一版（GPU 自动降级 CPU）- 推荐生产环境
+
+适用于 Linux 服务器（有 GPU 则加速，无 GPU 自动降级 CPU）：
+
+```bash
+# 1. 在联网环境构建镜像（Linux/Mac 均可）
+./scripts/build-offline.sh
+
+# 2. 传输到生产服务器
+rsync -avz docker-images/ user@prod-server:/opt/tianshu/
+
+# 3. 在生产服务器部署（自动检测 GPU/CPU）
+cd /opt/tianshu
+./deploy-offline.sh
+```
+
+**脚本说明**：
+
+##### 🔨 `build-offline.sh` - 镜像构建脚本
+
+在**联网环境**中一次性构建，输出所有部署文件。用于在开发环境构建 Docker 镜像和下载模型，然后传输到生产服务器离线部署。
+
+**功能**：
+- ✅ 自动检测 NVIDIA 环境（可选，仅提示）
+- ✅ 下载所有模型文件到 `./models-offline/`（~15GB）
+- ✅ 构建后端统一镜像（GPU with CPU fallback）
+- ✅ 构建前端镜像
+- ✅ 拉取 RustFS 对象存储镜像
+- ✅ 导出所有镜像为 tar.gz（包含 Docker 配置和启动脚本）
+- ✅ 生成 manifest.json 记录模型信息
+
+**使用**：
+```bash
+# 基础用法：构建 amd64 镜像
+./scripts/build-offline.sh
+
+# 环境变量控制
+PLATFORM=arm64 ./scripts/build-offline.sh  # 指定平台（默认 amd64）
+
+# 输出文件（在 docker-images/ 目录）
+# ├── tianshu-backend-amd64.tar.gz      # 后端统一镜像
+# ├── tianshu-frontend-amd64.tar.gz     # 前端镜像
+# ├── rustfs-amd64.tar.gz               # 对象存储镜像
+# ├── models-offline.tar.gz             # 所有模型（~15GB）
+# ├── docker-compose.yml                # Docker Compose 配置
+# ├── .env.example                      # 环境变量示例
+# ├── deploy-offline.sh                 # 部署脚本
+# └── deploy-offline-cpu.sh             # CPU 模式部署脚本
+```
+
+**时间预估**：
+- 首次运行：60-90 分钟（包括模型下载和镜像构建）
+- 后续运行：10-20 分钟（使用缓存）
+
+**故障排查**：
+- 模型下载失败：手动运行 `python3 backend/download_models.py --output models-offline`
+- 镜像构建失败：检查磁盘空间（至少需要 100GB）和 Docker 环境
+
+---
+
+##### 📥 `deploy-offline.sh` - 统一部署脚本（推荐）
+
+在**生产服务器**中部署的一键脚本。自动检测 GPU/CPU 环境并启动所有服务。
+
+**功能**：
+- ✅ 检测 NVIDIA 驱动和 CUDA 环境
+- ✅ 验证 NVIDIA Container Toolkit 状态
+- ✅ 加载所有 Docker 镜像（5-10 分钟）
+- ✅ 解压模型文件到 `./models-offline/`（5-10 分钟）
+- ✅ 创建必要的目录结构（data/, logs/）
+- ✅ 自动生成 .env 配置文件
+- ✅ 生成安全的 JWT 密钥
+- ✅ 自动检测服务器 IP 并配置 `RUSTFS_PUBLIC_URL`
+- ✅ 启动所有 Docker Compose 服务
+- ✅ 健康检查验证服务状态
+- ✅ 验证 GPU 访问权限（如有 GPU）
+
+**使用**：
+```bash
+# 确保在部署文件目录
+cd /opt/tianshu
+
+# 一键部署（自动检测 GPU/CPU）
+./deploy-offline.sh
+
+# 后续查看状态
+docker compose ps              # 查看容器状态
+docker compose logs -f         # 实时日志
+docker compose logs -f backend # 查看特定服务日志
+
+# 停止服务
+docker compose down
+```
+
+**部署流程**：
+1. 检测 NVIDIA 环境（自动检测 GPU，无 GPU 自动降级 CPU）
+2. 验证所需文件（镜像、模型等）
+3. 加载 Docker 镜像
+4. 解压模型文件
+5. 创建目录结构
+6. 配置环境变量和 JWT 密钥
+7. 启动容器服务
+8. 等待服务初始化（1-2 分钟）
+9. 验证 GPU 访问（如适用）
+10. 显示访问 URL 和后续命令
+
+**服务访问**：
+```
+Web UI:     http://<server-ip>:80
+API:        http://<server-ip>:8000
+API Docs:   http://<server-ip>:8000/docs
+RustFS:     http://<server-ip>:9001
+```
+
+**首次启动**：
+- 第一次启动时会初始化模型（自动从 models-offline 复制）
+- Worker 服务启动较慢（1-2 分钟），请耐心等待
+- 建议上传小文件（5-10 页 PDF）测试
+
+**故障排查**：
+```bash
+# 查看容器日志
+docker compose logs backend
+docker compose logs worker
+
+# 查看 GPU 使用情况
+docker compose exec worker nvidia-smi
+
+# 重启服务
+docker compose restart worker
+```
+
+---
+
+##### 📦 `backend/download_models.py` - 模型下载脚本
+
+独立的模型下载工具，支持灵活的模型选择和重新下载。
+
+**功能**：
+- ✅ 从 HuggingFace、ModelScope 下载模型
+- ✅ 验证模型完整性
+- ✅ 支持选择性下载（单个或多个模型）
+- ✅ 断点续传（自动重试失败的下载）
+- ✅ 生成 manifest.json 记录下载信息
+
+**使用**：
+```bash
+# 下载所有模型
+python3 backend/download_models.py --output ./models-offline
+
+# 仅下载特定模型
+python3 backend/download_models.py --output ./models-offline --models mineru,sensevoice
+
+# 强制重新下载（跳过已存在的文件）
+python3 backend/download_models.py --output ./models-offline --force
+
+# 使用国内镜像加速
+HF_ENDPOINT=https://hf-mirror.com python3 backend/download_models.py --output ./models-offline
+```
+
+**支持的模型**：
+- `mineru` - MinerU PDF 解析模型（必需）
+- `paddleocr` - PaddleOCR 多语言识别（自动下载）
+- `sensevoice` - SenseVoice 语音识别（推荐）
+- `paraformer` - Paraformer 说话人分离（可选）
+- `yolo11` - YOLO11x 水印检测（可选）
+- `lama` - LaMa 水印修复（可选）
+
+**时间预估**：
+- 所有模型：60-90 分钟（取决于网络速度）
+- 推荐模型：30-45 分钟
+
+---
+
+##### ⚙️ `scripts/init-models.sh` - 模型初始化脚本
+
+容器启动时自动运行，从外部卷复制模型到容器内。
+
+**功能**：
+- ✅ 检测设备模式（GPU/CPU）
+- ✅ 检查是否已初始化（跳过重复复制）
+- ✅ 从 `/models-external` 复制模型到容器内缓存
+- ✅ 创建必要的目录结构
+- ✅ 生成初始化标记（加快后续启动）
+
+**工作原理**：
+- 容器启动时自动调用
+- 首次运行：复制模型（5-10 分钟）
+- 后续运行：使用缓存标记，直接跳过（<1 秒）
+
+---
+
+#### 方式 2：CPU 专用版（Mac/无 GPU 环境）
+
+适用于 Mac（Apple Silicon/Intel）和无 GPU 的 Linux 环境：
+
+```bash
+# 1. 在联网环境构建镜像
+./scripts/build-offline.sh
+
+# 2. 传输构建产物（可选：直接在目标机器构建可跳过此步）
+rsync -avz docker-images/ user@target:/opt/tianshu/
+
+# 3. 在目标机器部署（强制 CPU 模式）
+cd /opt/tianshu
+./deploy-offline-cpu.sh
+```
+
+**特点**：
+- ✅ **强制 CPU 模式**：适合 Mac 和无 GPU 环境
+- ✅ **Rosetta 2 支持**：Apple Silicon Mac 自动使用 x86_64 仿真
+- ✅ **简化配置**：自动跳过 GPU 检测和配置
+- ✅ **独立脚本**：不依赖 GPU 环境
+
+**部署步骤**：
+```bash
+cd /opt/tianshu
+./deploy-offline-cpu.sh
+```
+
+**性能注意**：
+- CPU 模式比 GPU 模式慢 5-10 倍
+- 建议分配足够的 CPU 核心（8+ 核）
+- 建议分配充足的内存（16GB+）
+
+---
+
+#### 其他工具脚本
+
+##### 📤 `scripts/upload-to-server.sh` - 文件传输脚本
+
+自动化将构建产物传输到生产服务器并触发部署。
+
+**使用**：
+```bash
+# 基础用法
+./scripts/upload-to-server.sh [server_user] [server_host] [server_path]
+
+# 示例
+./scripts/upload-to-server.sh root 192.168.1.100 /opt/tianshu
+
+# 功能
+# - 清理本地多余文件（models-offline/、data/ 等）
+# - 创建临时文件夹并复制必要文件
+# - 使用 rsync 快速传输
+# - 自动清理临时文件
+# - 可选自动触发远程部署脚本
+```
+
+**特点**：
+- ✅ 仅传输必要文件（节省带宽）
+- ✅ 支持断点续传（网络中断自动重试）
+- ✅ 可选的自动部署触发
+
+---
+
+**流程总结**：
+
+```
+开发环境（联网）：
+  build-offline.sh
+    ├─ 下载模型（backend/download_models.py）
+    ├─ 构建镜像
+    ├─ 导出镜像和文件
+    └─ 输出到 docker-images/
+
+传输文件：
+  rsync / upload-to-server.sh
+    └─ 传输到生产服务器
+
+生产环境（离线）：
+  deploy-offline.sh / deploy-offline-cpu.sh
+    ├─ 加载镜像
+    ├─ 解压模型
+    ├─ 配置环境
+    └─ 启动服务（自动检测 GPU/CPU）
+```
+
+**特点**：
+- ✅ **统一镜像**：自动检测 GPU，有则加速，无则 CPU 降级
+- ✅ **跨平台构建**：支持在 Mac（Apple Silicon/Intel）构建 Linux amd64 镜像
+- ✅ **完全离线**：所有模型（~15GB）和依赖预先打包
+- ✅ **一键部署**：自动配置环境变量、JWT 密钥、RustFS 对象存储
+- ✅ **Office 文档支持**：自动转换 .doc/.docx/.pptx 等格式为 PDF 后处理
+
+**关键修复**：
+- 🔧 Worker uploads 目录读写权限（支持 Office 转 PDF）
+- 🔧 albumentations/albucore 版本锁定（解决 MinerU 公式识别依赖）
+- 🔧 RustFS 镜像平台指定（确保 amd64 架构一致性）
+
+📖 **详细说明**：[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)
+
+### 在线 Docker 部署
+
+推荐使用 Docker Compose 一键部署：
+
+```bash
+# 一键部署
+docker compose up -d
+
+# 或使用 Make 命令
+make setup
+```
+
+### 手动部署
+
+如需手动部署：
 
 **前端构建**：`cd frontend && npm run build`（产物在 `dist/`）
 

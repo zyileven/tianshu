@@ -38,6 +38,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libgstreamer1.0-0 \
     ffmpeg \
+    antiword \
+    pandoc \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 LibreOffice (固定大版本,确保构建可重现)
+# Ubuntu 24.04 默认提供 LibreOffice 24.8.x
+# 固定到 24.8.x 系列,避免大版本升级带来的不兼容
+RUN apt-get update && \
+    echo "Available LibreOffice versions:" && \
+    apt-cache policy libreoffice | head -20 && \
+    apt-get install -y --no-install-recommends \
+    libreoffice \
+    libreoffice-writer \
+    libreoffice-calc \
+    libreoffice-impress \
+    && echo "Installed LibreOffice version:" && \
+    libreoffice --version \
     && rm -rf /var/lib/apt/lists/*
 
 # 创建符号链接，让 python3 指向 python3.12
@@ -72,10 +89,11 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     --default-timeout=600 \
     --retries 5
 
-# Step 2: 安装 PyTorch (CUDA 12.6, ~2GB, 包含 torchaudio for SenseVoice/FunASR)
+# Step 2: 安装 PyTorch (CUDA 12.1, ~2GB, 包含 torchaudio for SenseVoice/FunASR)
+# 使用 PyTorch 2.5.1 而不是 2.6.0，避免 weights_only=True 导致的模型加载问题
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install torch==2.6.0+cu126 torchvision==0.21.0+cu126 torchaudio==2.6.0+cu126 \
-    --index-url https://download.pytorch.org/whl/cu126 \
+    pip install torch==2.5.1+cu121 torchvision==0.20.1+cu121 torchaudio==2.5.1+cu121 \
+    --index-url https://download.pytorch.org/whl/cu121 \
     --break-system-packages \
     --default-timeout=600 \
     --retries 5
@@ -99,9 +117,18 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     --default-timeout=300 \
     --retries 5
 
-# Step 4: 安装核心包（使用 --no-deps 避免重新解析依赖）
+# Step 4: 安装核心包
+# 分两步：先安装 mineru 的依赖，再安装 mineru 本身（避免依赖回溯）
 RUN --mount=type=cache,target=/root/.cache/pip \
-    echo "Installing core packages..." && \
+    echo "Installing MinerU dependencies first..." && \
+    pip install doclayout-yolo ftfy dill rapidfuzz \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --break-system-packages \
+    --default-timeout=300 \
+    --retries 5
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    echo "Installing core packages with --no-deps..." && \
     pip install mineru[core] paddleocr[doc-parser] \
     transformers==4.46.3 tokenizers==0.20.3 \
     fastapi uvicorn litserve aiohttp \
@@ -151,7 +178,8 @@ COPY pyproject.toml /app/
 
 # 复制启动脚本
 COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+COPY scripts/init-models.sh /usr/local/bin/init-models.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/init-models.sh
 
 # 创建必要的目录
 RUN mkdir -p /app/models /app/data /app/uploads /app/output /app/logs

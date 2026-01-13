@@ -55,6 +55,15 @@
 # MinerU - Core OCR Pipeline
 mineru[core]==2.6.2
 
+# DocLayout-YOLO - Document Layout Analysis (MinerU dependency)
+doclayout-yolo>=0.0.2
+
+# ftfy - Text fixing for Unicode (MinerU MFR dependency)
+ftfy>=6.0.0
+
+# dill - Enhanced serialization for Python (required for loading YOLO models)
+dill>=0.3.0
+
 # PaddleOCR-VL - Document Parser (Auto language detection for 109+ languages)
 paddleocr[doc-parser]
 
@@ -71,8 +80,8 @@ img2pdf>=0.5.0   # Image to PDF conversion
 pikepdf>=9.0.0   # Fast PDF manipulation (for PDF splitting, 6-8x faster than pypdf)
 
 # Image Augmentation (Python 3.12 兼容版本)
-albumentations>=1.4.4,<2.0.0
-albucore>=0.0.13,<0.0.20
+albumentations==1.4.24
+albucore==0.0.23  # albumentations 1.4.24 要求精确版本 0.0.23（包含 batch_transform）
 kiwisolver>=1.4.5  # Python 3.12 必需
 matplotlib>=3.9.0  # Python 3.12 兼容
 contourpy>=1.3.0   # matplotlib 依赖,Python 3.12 兼容
@@ -162,6 +171,9 @@ python-dotenv>=1.0.0
 
 # Office Document Parsing (MarkItDown backend)
 markitdown[all]>=0.1.3
+
+# pypandoc - Pandoc wrapper for legacy Office formats (.doc, .rtf, etc.)
+pypandoc>=1.11
 
 # MinIO Object Storage (optional)
 minio>=7.2.0
