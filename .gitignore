@@ -56,3 +56,6 @@ data/
 *.bak
 *.swp
 *~
+
+docker-images
+models-offline
