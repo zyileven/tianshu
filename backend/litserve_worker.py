@@ -715,26 +715,46 @@ class MinerUWorkerAPI(ls.LitAPI):
         }
 
     def _process_with_markitdown(self, file_path: str) -> dict:
-        """使用 MarkItDown 处理 Office 文档"""
+        """使用 MarkItDown 处理 Office 文档（增强版：支持 DOCX 图片提取）"""
         if not self.markitdown:
             raise RuntimeError("MarkItDown is not available")
-
-        # 处理文件
-        result = self.markitdown.convert(file_path)
 
         # 创建输出目录（与其他引擎保持一致）
         output_dir = Path(self.output_dir) / Path(file_path).stem
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        # 处理文件：提取文本
+        result = self.markitdown.convert(file_path)
+        markdown_content = result.text_content
+
+        # 如果是 DOCX 文件，提取嵌入的图片
+        file_ext = Path(file_path).suffix.lower()
+        if file_ext == ".docx":
+            try:
+                from utils.docx_image_extractor import extract_images_from_docx, append_images_to_markdown
+
+                # 提取图片到 images 目录
+                images_dir = output_dir / "images"
+                images = extract_images_from_docx(file_path, str(images_dir))
+
+                # 如果有图片，将图片引用添加到 Markdown
+                if images:
+                    markdown_content = append_images_to_markdown(markdown_content, images)
+                    logger.info(f"🖼️  Extracted {len(images)} images from DOCX")
+
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to extract images from DOCX: {e}")
+                # 继续处理，不影响文本提取
+
         # 保存结果到目录中
         output_file = output_dir / f"{Path(file_path).stem}_markitdown.md"
-        output_file.write_text(result.text_content, encoding="utf-8")
+        output_file.write_text(markdown_content, encoding="utf-8")
 
         # 规范化输出（统一文件名和目录结构）
         normalize_output(output_dir)
 
         # 返回目录路径（与其他引擎保持一致）
-        return {"result_path": str(output_dir), "content": result.text_content}
+        return {"result_path": str(output_dir), "content": markdown_content}
 
     def _process_with_paddleocr_vl(self, file_path: str, options: dict) -> dict:
         """使用 PaddleOCR-VL 处理图片或 PDF"""
@@ -1529,7 +1549,7 @@ if __name__ == "__main__":
     if devices == "auto":
         # 首先尝试从环境变量 CUDA_VISIBLE_DEVICES 读取（如果用户明确设置了）
         env_devices = os.getenv("CUDA_VISIBLE_DEVICES")
-        if env_devices:
+        if env_devices and env_devices.strip():
             devices = env_devices
             logger.info(f"📊 Using devices from CUDA_VISIBLE_DEVICES: {devices}")
         else:
