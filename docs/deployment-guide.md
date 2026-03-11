@@ -166,7 +166,7 @@ bash deploy-offline.sh
 
 ```bash
 # 构建后端镜像
-DOCKER_BUILDKIT=1 docker buildx build -f backend/Dockerfile.offline -t tianshu-backend:latest ./backend
+DOCKER_BUILDKIT=1 docker buildx build -f backend/Dockerfile.offline -t tianshu-backend:latest .
 
 # 导出镜像
 docker save tianshu-backend:latest | gzip > docker-images/tianshu-backend-amd64.tar.gz
@@ -175,7 +175,7 @@ docker save tianshu-backend:latest | gzip > docker-images/tianshu-backend-amd64.
 如果修改了前端代码：
 
 ```bash
-docker buildx build -f frontend/Dockerfile -t tianshu-frontend:latest ./frontend
+docker buildx build -f frontend/Dockerfile -t tianshu-frontend:latest .
 docker save tianshu-frontend:latest | gzip > docker-images/tianshu-frontend-amd64.tar.gz
 ```
 
