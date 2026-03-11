@@ -262,8 +262,8 @@ services:
 
       # PDF 拆分配置（Worker 中执行）
       - PDF_SPLIT_ENABLED=${PDF_SPLIT_ENABLED:-true}
-      - PDF_SPLIT_THRESHOLD_PAGES=${PDF_SPLIT_THRESHOLD_PAGES:-500}
-      - PDF_SPLIT_CHUNK_SIZE=${PDF_SPLIT_CHUNK_SIZE:-500}
+      - PDF_SPLIT_THRESHOLD_PAGES=${PDF_SPLIT_THRESHOLD_PAGES:-100}
+      - PDF_SPLIT_CHUNK_SIZE=${PDF_SPLIT_CHUNK_SIZE:-100}
 
       # RustFS 对象存储配置
       - RUSTFS_ENABLED=${RUSTFS_ENABLED:-true}
@@ -308,6 +308,42 @@ services:
     depends_on:
       - rustfs
       # redis 是可选依赖，不在 depends_on 中强制依赖
+
+  # ============================================================================
+  # Task Scheduler (故障恢复 & 监控)
+  # ============================================================================
+  # 负责重置超时任务、健康检查、清理旧任务
+  # 没有 Scheduler 时，卡在 processing 的任务将永远无法自动恢复
+  # ============================================================================
+  scheduler:
+    image: tianshu-backend:latest
+    container_name: tianshu-scheduler
+    restart: unless-stopped
+    command: ["scheduler", "python", "task_scheduler.py",
+      "--litserve-url", "http://worker:8001/predict",
+      "--monitor-interval", "60",
+      "--stale-task-timeout", "30",
+      "--cleanup-old-files-days", "${CLEANUP_OLD_FILES_DAYS:-7}",
+      "--wait-for-workers"]
+    volumes:
+      # 数据库（需要读写，重置超时任务）
+      - ./data/db:/app/data/db:rw
+      # 输出结果（清理旧文件需要）
+      - ./data/output:/app/data/output:rw
+      # 日志
+      - ./logs/scheduler:/app/logs:rw
+      # 时区配置
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    environment:
+      - TZ=Asia/Shanghai
+      - DATABASE_PATH=${DATABASE_PATH:-/app/data/db/mineru_tianshu.db}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    networks:
+      - tianshu-network
+    depends_on:
+      - worker
+      - backend
 
   # ============================================================================
   # MCP Server (Model Context Protocol)

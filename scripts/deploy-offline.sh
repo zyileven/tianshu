@@ -143,13 +143,21 @@ main() {
     echo ""
 
     # 4. 解压模型文件
-    if [ ! -L "models-offline.tar.gz" ]; then
-        log_info "📦 Extracting models..."
-        log_info "   This may take 5-10 minutes..."
-        tar xzf models-offline.tar.gz
-        log_success "Models extracted successfully"
+    if [ -d "models-offline" ] && [ "$(ls -A models-offline 2>/dev/null)" ]; then
+        log_info "📦 Detected existing models-offline/ directory"
+        echo ""
+        read -p "$(echo -e "${YELLOW}[PROMPT]${NC} 模型文件是否有更新？需要重新解压吗？(y/N): ")" extract_models
+        if [[ "$extract_models" =~ ^[Yy]$ ]]; then
+            log_info "📦 Re-extracting models..."
+            log_info "   This may take 5-10 minutes..."
+            tar xzf models-offline.tar.gz
+            log_success "Models re-extracted successfully"
+        else
+            log_info "⏭️  Skipping model extraction, using existing models"
+        fi
     else
-        log_info "📦 Models are linked, extracting from source..."
+        log_info "📦 Extracting models (first time)..."
+        log_info "   This may take 5-10 minutes..."
         tar xzf models-offline.tar.gz
         log_success "Models extracted successfully"
     fi

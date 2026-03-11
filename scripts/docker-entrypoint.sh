@@ -49,7 +49,7 @@ check_environment() {
     fi
 
     # Check necessary environment variables (only API Server needs JWT)
-    if [ "$service_type" != "worker" ] && [ "$service_type" != "mcp" ]; then
+    if [ "$service_type" != "worker" ] && [ "$service_type" != "mcp" ] && [ "$service_type" != "scheduler" ]; then
         if [ -z "$JWT_SECRET_KEY" ]; then
             log_error "JWT_SECRET_KEY is not set! Please configure in .env"
             exit 1
@@ -210,9 +210,10 @@ main() {
     # Initialize models before checking (for worker only)
     if [ "$SERVICE_TYPE" = "worker" ]; then
         initialize_models
+        check_models
+    elif [ "$SERVICE_TYPE" != "scheduler" ]; then
+        check_models
     fi
-
-    check_models
 
     # Execute different checks based on service type
 
@@ -222,6 +223,9 @@ main() {
         shift  # Remove first argument (service type)
     elif [ "$SERVICE_TYPE" = "mcp" ]; then
         log_info "Startup type: MCP Server"
+        shift  # Remove first argument (service type)
+    elif [ "$SERVICE_TYPE" = "scheduler" ]; then
+        log_info "Startup type: Task Scheduler"
         shift  # Remove first argument (service type)
     else
         log_info "Startup type: API Server"
