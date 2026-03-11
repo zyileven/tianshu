@@ -162,11 +162,15 @@ bash deploy-offline.sh
 
 ### 3.1 重新构建需要更新的镜像
 
+> **注意：** 目标服务器为 amd64 架构，构建时必须指定 `--platform linux/amd64`。
+> 在 Mac (Apple Silicon) 上跨架构构建会通过 QEMU 模拟，速度较慢。
+> 如果条件允许，建议直接在 GPU 服务器上构建（无需指定 `--platform`，原生 amd64）。
+
 如果修改了后端代码，需要先重新构建后端镜像：
 
 ```bash
-# 构建后端镜像
-DOCKER_BUILDKIT=1 docker buildx build -f backend/Dockerfile.offline -t tianshu-backend:latest .
+# 构建后端镜像（指定 amd64 架构）
+DOCKER_BUILDKIT=1 docker buildx build --platform linux/amd64 -f backend/Dockerfile.offline -t tianshu-backend:latest .
 
 # 导出镜像
 docker save tianshu-backend:latest | gzip > docker-images/tianshu-backend-amd64.tar.gz
@@ -175,7 +179,7 @@ docker save tianshu-backend:latest | gzip > docker-images/tianshu-backend-amd64.
 如果修改了前端代码：
 
 ```bash
-docker buildx build -f frontend/Dockerfile -t tianshu-frontend:latest .
+docker buildx build --platform linux/amd64 -f frontend/Dockerfile -t tianshu-frontend:latest .
 docker save tianshu-frontend:latest | gzip > docker-images/tianshu-frontend-amd64.tar.gz
 ```
 
@@ -199,6 +203,7 @@ bash scripts/upload-spec-to-server.sh <用户名> <服务器IP> <部署路径> <
 
 ```bash
 bash scripts/upload-spec-to-server.sh root 192.168.1.100 /opt/tianshu backend
+bash scripts/upload-spec-to-server.sh gpu 192.168.100.27 /home/gpu/tianshu2 backend
 ```
 
 脚本会自动：
