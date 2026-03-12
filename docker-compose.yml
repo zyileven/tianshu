@@ -264,6 +264,8 @@ services:
       - PDF_SPLIT_ENABLED=${PDF_SPLIT_ENABLED:-true}
       - PDF_SPLIT_THRESHOLD_PAGES=${PDF_SPLIT_THRESHOLD_PAGES:-100}
       - PDF_SPLIT_CHUNK_SIZE=${PDF_SPLIT_CHUNK_SIZE:-100}
+      # 文件大小阈值（MB），超过此值强制分割以防 OOM
+      - PDF_SPLIT_SIZE_MB=${PDF_SPLIT_SIZE_MB:-20}
 
       # RustFS 对象存储配置
       - RUSTFS_ENABLED=${RUSTFS_ENABLED:-true}
@@ -282,14 +284,14 @@ services:
       - REDIS_DB=${REDIS_DB:-0}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
     # 内存限制（兼容旧版 docker-compose）
-    mem_limit: ${WORKER_MEMORY_LIMIT:-16G}
-    memswap_limit: ${WORKER_MEMORY_LIMIT:-16G}
+    mem_limit: ${WORKER_MEMORY_LIMIT:-24G}
+    memswap_limit: ${WORKER_MEMSWAP_LIMIT:-32G}
     mem_reservation: ${WORKER_MEMORY_RESERVATION:-8G}
     deploy:
       resources:
         limits:
           # 内存硬限制（Docker Compose v2 / Swarm 模式）
-          memory: ${WORKER_MEMORY_LIMIT:-16G}
+          memory: ${WORKER_MEMORY_LIMIT:-24G}
         reservations:
           # 内存软限制（Docker Compose v2 / Swarm 模式）
           memory: ${WORKER_MEMORY_RESERVATION:-8G}

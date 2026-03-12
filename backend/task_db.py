@@ -661,14 +661,33 @@ class TaskDB:
             deleted_count = cursor.rowcount
             return deleted_count
 
-    def reset_stale_tasks(self, timeout_minutes: int = 60):
+    def reset_stale_tasks(self, timeout_minutes: int = 60, max_retries: int = 3):
         """
-        重置超时的 processing 任务为 pending
+        重置超时的 processing 任务为 pending，超过最大重试次数的标记为 failed
 
         Args:
             timeout_minutes: 超时时间（分钟）
+            max_retries: 最大重试次数，超过则标记为 failed
         """
         with self.get_cursor() as cursor:
+            # 先将超过重试次数的任务标记为 failed
+            cursor.execute(
+                """
+                UPDATE tasks
+                SET status = 'failed',
+                    completed_at = CURRENT_TIMESTAMP,
+                    error_message = 'Max retries exceeded (retry_count >= ' || ? || '). Task may cause worker OOM or crash.'
+                WHERE status = 'processing'
+                AND started_at < datetime('now', '-' || ? || ' minutes')
+                AND retry_count >= ?
+            """,
+                (max_retries, timeout_minutes, max_retries),
+            )
+            failed_count = cursor.rowcount
+            if failed_count > 0:
+                logger.warning(f"⚠️  Marked {failed_count} tasks as failed (exceeded {max_retries} retries)")
+
+            # 将其余超时任务重置为 pending
             cursor.execute(
                 """
                 UPDATE tasks

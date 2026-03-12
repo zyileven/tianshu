@@ -421,6 +421,17 @@ class MinerUWorkerAPI(ls.LitAPI):
             physical_gpu = os.environ.get("CUDA_VISIBLE_DEVICES", "?")
             logger.info(f"   Physical GPU: {physical_gpu}")
 
+        # Worker 启动时恢复卡住的 processing 任务
+        # 使用较短的超时（10分钟），因为正常任务不会卡住这么久不更新状态
+        try:
+            reset_count = self.task_db.reset_stale_tasks(timeout_minutes=10, max_retries=3)
+            if reset_count > 0:
+                logger.warning(f"🔄 Startup recovery: reset {reset_count} stale tasks back to pending")
+            else:
+                logger.info("✅ Startup recovery: no stale tasks found")
+        except Exception as e:
+            logger.error(f"❌ Startup recovery failed: {e}")
+
         # 如果启用了 worker 循环，启动后台线程拉取任务
         if self.enable_worker_loop:
             self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
@@ -1105,15 +1116,35 @@ class MinerUWorkerAPI(ls.LitAPI):
 
         pdf_split_threshold = int(os.getenv("PDF_SPLIT_THRESHOLD_PAGES", "500"))
         pdf_split_chunk_size = int(os.getenv("PDF_SPLIT_CHUNK_SIZE", "500"))
+        # 文件大小阈值（MB），超过此值强制分割以防 OOM
+        pdf_split_size_mb = int(os.getenv("PDF_SPLIT_SIZE_MB", "20"))
 
         try:
             # 快速读取 PDF 页数（只读元数据）
             page_count = get_pdf_page_count(Path(file_path))
-            logger.info(f"📄 PDF has {page_count} pages (threshold: {pdf_split_threshold})")
+            file_size_mb = Path(file_path).stat().st_size / (1024 * 1024)
+            logger.info(
+                f"📄 PDF has {page_count} pages, {file_size_mb:.1f}MB "
+                f"(page threshold: {pdf_split_threshold}, size threshold: {pdf_split_size_mb}MB)"
+            )
 
-            # 判断是否需要拆分
-            if page_count <= pdf_split_threshold:
+            # 判断是否需要拆分：页数超阈值 或 文件大小超阈值
+            need_split_by_pages = page_count > pdf_split_threshold
+            need_split_by_size = file_size_mb > pdf_split_size_mb and page_count > 1
+
+            if not need_split_by_pages and not need_split_by_size:
                 return False
+
+            if need_split_by_size and not need_split_by_pages:
+                # 基于文件大小触发分割时，使用更小的 chunk_size 以控制内存
+                # 根据文件大小动态计算每个 chunk 的页数
+                pages_per_mb = max(1, page_count / file_size_mb)
+                target_chunk_mb = pdf_split_size_mb * 0.8  # 目标每个 chunk 不超过阈值的 80%
+                pdf_split_chunk_size = max(5, min(pdf_split_chunk_size, int(pages_per_mb * target_chunk_mb)))
+                logger.warning(
+                    f"⚠️  Large file detected ({file_size_mb:.1f}MB), "
+                    f"force splitting to prevent OOM (chunk_size={pdf_split_chunk_size} pages)"
+                )
 
             logger.info(
                 f"🔀 Large PDF detected ({page_count} pages), splitting into chunks of {pdf_split_chunk_size} pages"
