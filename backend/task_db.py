@@ -661,6 +661,40 @@ class TaskDB:
             deleted_count = cursor.rowcount
             return deleted_count
 
+    def reset_tasks_from_dead_worker(self, worker_id_prefix: str, current_worker_id: str) -> int:
+        """
+        重置属于已死亡 Worker 实例的 processing 任务。
+
+        Worker ID 格式: tianshu-{hostname}-{device}-{pid}
+        重启后 PID 变化，旧实例的任务会永远卡在 processing。
+        本方法通过前缀匹配（hostname+device 相同）找到旧实例遗留任务并立即重置，
+        不依赖时间窗口，确保 Worker 重启后立刻恢复。
+
+        Args:
+            worker_id_prefix: 当前设备的前缀，如 "tianshu-cb3e2d3f2604-cuda:0"
+            current_worker_id: 当前 Worker 自身 ID，排除在外避免重置自己的任务
+        """
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE tasks
+                SET status = 'pending',
+                    worker_id = NULL,
+                    retry_count = retry_count + 1
+                WHERE status = 'processing'
+                  AND worker_id LIKE ? || '-%'
+                  AND worker_id != ?
+            """,
+                (worker_id_prefix, current_worker_id),
+            )
+            reset_count = cursor.rowcount
+            if reset_count > 0:
+                logger.warning(
+                    f"🔄 Dead worker recovery: reset {reset_count} tasks "
+                    f"from previous instances of '{worker_id_prefix}'"
+                )
+            return reset_count
+
     def reset_stale_tasks(self, timeout_minutes: int = 60, max_retries: int = 3):
         """
         重置超时的 processing 任务为 pending，超过最大重试次数的标记为 failed

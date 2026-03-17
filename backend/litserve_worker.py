@@ -422,7 +422,22 @@ class MinerUWorkerAPI(ls.LitAPI):
             logger.info(f"   Physical GPU: {physical_gpu}")
 
         # Worker 启动时恢复卡住的 processing 任务
-        # 使用较短的超时（10分钟），因为正常任务不会卡住这么久不更新状态
+        # 第一步：按 worker 前缀识别已死亡的旧实例，立即重置其遗留任务（不依赖时间窗口）
+        # Worker ID 格式: tianshu-{hostname}-{device}-{pid}，前缀 = hostname+device 部分
+        try:
+            worker_id_prefix = "-".join(self.worker_id.rsplit("-", 1)[:-1])  # 去掉尾部 -{pid}
+            reset_count = self.task_db.reset_tasks_from_dead_worker(
+                worker_id_prefix=worker_id_prefix,
+                current_worker_id=self.worker_id,
+            )
+            if reset_count > 0:
+                logger.warning(f"🔄 Dead-worker recovery: reset {reset_count} tasks from previous instance")
+            else:
+                logger.info("✅ Dead-worker recovery: no orphaned tasks found")
+        except Exception as e:
+            logger.error(f"❌ Dead-worker recovery failed: {e}")
+
+        # 第二步：兜底——重置其他来源的超时任务（其他机器崩溃等情况）
         try:
             reset_count = self.task_db.reset_stale_tasks(timeout_minutes=10, max_retries=3)
             if reset_count > 0:
