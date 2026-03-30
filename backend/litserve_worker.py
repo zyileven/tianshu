@@ -652,17 +652,41 @@ class MinerUWorkerAPI(ls.LitAPI):
                     logger.info(f"🔧 [Auto] Processing with MinerU Pipeline: {file_path}")
                     result = self._process_with_mineru(file_path, options)
 
-                # 7.5 兜底：Office 文档/文本/HTML 使用 MarkItDown（如果可用）
-                elif (
-                    file_ext in [".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt", ".html", ".txt", ".csv"]
-                    and self.markitdown
-                ):
-                    logger.info(f"📄 [Auto] Processing Office/Text file with MarkItDown: {file_path}")
+                # 7.4.5 Markdown 文件处理
+                elif file_ext == ".md":
+                    logger.info(f"📝 [Auto] Processing Markdown file: {file_path}")
+                    result = self._process_markdown(file_path, options)
+
+                # 7.5 新格式 Office 文件 (docx/xlsx/pptx) - 图片上传 RustFS
+                elif file_ext in [".docx", ".xlsx", ".pptx"]:
+                    if options.get("convert_office_to_pdf", False):
+                        logger.info(f"📄 [Auto] Converting Office to PDF: {file_path}")
+                        pdf_path = self._convert_office_to_pdf(file_path)
+                        result = self._process_with_mineru(pdf_path, options)
+                    elif self.markitdown:
+                        logger.info(f"📄 [Auto] Processing Office file with RustFS image upload: {file_path}")
+                        result = self._process_office(file_path, options)
+                    else:
+                        logger.warning(f"⚠️  MarkItDown not available, falling back to PDF conversion")
+                        pdf_path = self._convert_office_to_pdf(file_path)
+                        result = self._process_with_mineru(pdf_path, options)
+
+                # 7.6 旧格式 Office 文件 (doc/xls/ppt) - 转为 PDF 处理
+                elif file_ext in [".doc", ".xls", ".ppt"]:
+                    logger.info(f"📄 [Auto] Converting legacy Office to PDF: {file_path}")
+                    pdf_path = self._convert_office_to_pdf(file_path)
+                    result = self._process_with_mineru(pdf_path, options)
+
+                # 7.7 其他文本文件 (html/txt/csv) 使用 MarkItDown
+                elif file_ext in [".html", ".txt", ".csv"] and self.markitdown:
+                    logger.info(f"📄 [Auto] Processing text file with MarkItDown: {file_path}")
                     result = self._process_with_markitdown(file_path)
 
                 else:
                     # 没有合适的处理器
-                    supported_formats = "PDF, PNG, JPG (MinerU/PaddleOCR), Audio (SenseVoice), Video, FASTA, GenBank"
+                    supported_formats = (
+                        "PDF, PNG, JPG (MinerU/PaddleOCR), Markdown, Audio (SenseVoice), Video, FASTA, GenBank"
+                    )
                     if self.markitdown:
                         supported_formats += ", Office/Text (MarkItDown)"
                     raise ValueError(
@@ -789,24 +813,24 @@ class MinerUWorkerAPI(ls.LitAPI):
         result = self.markitdown.convert(file_path)
         markdown_content = result.text_content
 
-        # 如果是 DOCX 文件，提取嵌入的图片
+        # 如果是 Office 文件，提取嵌入的图片
         file_ext = Path(file_path).suffix.lower()
-        if file_ext == ".docx":
+        if file_ext in [".docx", ".xlsx", ".pptx"]:
             try:
-                from utils.docx_image_extractor import extract_images_from_docx, append_images_to_markdown
+                from utils.docx_image_extractor import (
+                    extract_images_from_office,
+                    append_images_to_markdown,
+                )
 
-                # 提取图片到 images 目录
                 images_dir = output_dir / "images"
-                images = extract_images_from_docx(file_path, str(images_dir))
+                images = extract_images_from_office(file_path, str(images_dir))
 
-                # 如果有图片，将图片引用添加到 Markdown
                 if images:
                     markdown_content = append_images_to_markdown(markdown_content, images)
-                    logger.info(f"🖼️  Extracted {len(images)} images from DOCX")
+                    logger.info(f"🖼️  Extracted {len(images)} images from {file_ext.upper()}")
 
             except Exception as e:
-                logger.warning(f"⚠️  Failed to extract images from DOCX: {e}")
-                # 继续处理，不影响文本提取
+                logger.warning(f"⚠️  Failed to extract images from {file_ext.upper()}: {e}")
 
         # 保存结果到目录中
         output_file = output_dir / f"{Path(file_path).stem}_markitdown.md"
@@ -817,6 +841,185 @@ class MinerUWorkerAPI(ls.LitAPI):
 
         # 返回目录路径（与其他引擎保持一致）
         return {"result_path": str(output_dir), "content": markdown_content}
+
+    def _process_markdown(self, file_path: str, options: dict) -> dict:
+        """
+        处理 Markdown 文件，提取图片并上传到 RustFS
+
+        Args:
+            file_path: Markdown 文件路径
+            options: 处理选项
+
+        Returns:
+            {
+                "result_path": str,
+                "content": str,  # 处理后的 Markdown（<img> 标签）
+                "chunks": List[str],  # 切分后的块
+                "images": List[Dict],  # 图片元数据
+                "rustfs_urls": Dict  # {原始src: rustfs_url}
+            }
+        """
+        from utils.markdown_image_extractor import (
+            process_markdown_images,
+            chunk_markdown_by_heading,
+        )
+
+        md_file = Path(file_path)
+        markdown_content = md_file.read_text(encoding="utf-8")
+
+        output_dir = Path(self.output_dir) / md_file.stem
+        output_dir.mkdir(parents=True, exist_ok=True)
+        images_dir = output_dir / "images"
+
+        try:
+            from storage import RustFSClient
+
+            rustfs_client = RustFSClient()
+        except Exception as e:
+            logger.warning(f"⚠️  RustFS not available: {e}")
+            rustfs_client = None
+
+        result = process_markdown_images(
+            markdown_content=markdown_content,
+            markdown_file_path=str(md_file),
+            output_dir=str(images_dir),
+            rustfs_client=rustfs_client,
+        )
+
+        structured_chunks = chunk_markdown_by_heading(
+            result["content"],
+            include_images=True,
+            image_info=result["images"],
+        )
+
+        result_file = output_dir / "result.md"
+        result_file.write_text(result["content"], encoding="utf-8")
+
+        chunks_file = output_dir / "chunks.json"
+        chunks_file.write_text(
+            json.dumps(structured_chunks, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        logger.info(f"📝 Markdown processed: {len(result['images'])} images extracted")
+
+        return {
+            "result_path": str(output_dir),
+            "content": result["content"],
+            "chunks": structured_chunks,
+            "images": result["images"],
+            "rustfs_urls": result["rustfs_urls"],
+        }
+
+    def _process_office(self, file_path: str, options: dict) -> dict:
+        """
+        处理新格式 Office 文件 (docx/xlsx/pptx)，提取图片并上传到 RustFS
+
+        Args:
+            file_path: Office 文件路径
+            options: 处理选项
+
+        Returns:
+            {
+                "result_path": str,
+                "content": str,  # 处理后的 Markdown（<img> 标签）
+                "chunks": List[Dict],  # 切分后的块
+                "images": List[Dict],  # 图片元数据
+                "rustfs_urls": Dict  # {原始src: rustfs_url}
+            }
+        """
+        from utils.docx_image_extractor import (
+            extract_images_from_office,
+            get_image_rels_mapping,
+        )
+        from utils.markdown_image_extractor import chunk_markdown_by_heading
+
+        if not self.markitdown:
+            raise RuntimeError("MarkItDown is not available")
+
+        file_ext = Path(file_path).suffix.lower()
+
+        output_dir = Path(self.output_dir) / Path(file_path).stem
+        output_dir.mkdir(parents=True, exist_ok=True)
+        images_dir = output_dir / "images"
+
+        result = self.markitdown.convert(file_path)
+        markdown_content = result.text_content
+
+        images = []
+        if file_ext in [".docx", ".xlsx", ".pptx"]:
+            try:
+                image_names = extract_images_from_office(file_path, str(images_dir))
+
+                if image_names:
+                    logger.info(f"🖼️  Extracted {len(image_names)} images from {file_ext.upper()}")
+
+                    try:
+                        from storage import RustFSClient
+
+                        rustfs_client = RustFSClient()
+                    except Exception as e:
+                        logger.warning(f"⚠️  RustFS not available: {e}")
+                        rustfs_client = None
+
+                    for img_name in image_names:
+                        img_path = images_dir / img_name
+                        rustfs_url = None
+                        if rustfs_client and img_path.exists():
+                            try:
+                                rustfs_url = rustfs_client.upload_file(str(img_path))
+                                logger.debug(f"✅ Uploaded to RustFS: {img_name}")
+                            except Exception as e:
+                                logger.warning(f"⚠️  Failed to upload {img_name}: {e}")
+
+                        images.append(
+                            {
+                                "original": f"![]({img_name})",
+                                "src": img_name,
+                                "alt": img_name,
+                                "local_path": str(img_path),
+                                "rustfs_url": rustfs_url,
+                            }
+                        )
+
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to extract images from {file_ext.upper()}: {e}")
+
+        for img in images:
+            if img["rustfs_url"]:
+                markdown_content = markdown_content.replace(
+                    f"![]({img['src']})", f'<img src="{img["rustfs_url"]}" alt="{img["alt"]}">'
+                )
+                markdown_content = markdown_content.replace(
+                    f"![{img['alt']}]({img['src']})", f'<img src="{img["rustfs_url"]}" alt="{img["alt"]}">'
+                )
+
+        result_file = output_dir / "result.md"
+        result_file.write_text(markdown_content, encoding="utf-8")
+
+        structured_chunks = chunk_markdown_by_heading(
+            markdown_content,
+            include_images=True,
+            image_info=images,
+        )
+
+        chunks_file = output_dir / "chunks.json"
+        chunks_file.write_text(
+            json.dumps(structured_chunks, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        rustfs_urls = {img["src"]: img["rustfs_url"] for img in images if img["rustfs_url"]}
+
+        logger.info(f"📄 Office processed: {len(images)} images extracted")
+
+        return {
+            "result_path": str(output_dir),
+            "content": markdown_content,
+            "chunks": structured_chunks,
+            "images": images,
+            "rustfs_urls": rustfs_urls,
+        }
 
     def _convert_office_to_pdf(self, file_path: str) -> str:
         """
