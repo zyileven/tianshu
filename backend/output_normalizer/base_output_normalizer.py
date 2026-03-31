@@ -171,6 +171,31 @@ class BaseOutputNormalizer:
             logger.debug(f"🔍 Replacing URLs in {md_file.name}")
             logger.debug(f"   URL mapping: {url_mapping}")
 
+            # 处理 base64 格式的图片引用（无效的 base64 引用需要替换为 RustFS URL）
+            # 格式: ![filename.png](data:image/png;base64,...) - alt 文本通常是文件名
+            base64_pattern = r"!\[([^\]]*)\]\((data:image/[^)]+)\)"
+
+            def replace_base64_image(match):
+                nonlocal replaced_count
+                alt_text = match.group(1) or ""
+                # alt 文本通常是文件名，尝试在 url_mapping 中找到对应的 URL
+                if alt_text in url_mapping:
+                    rustfs_url = url_mapping[alt_text]
+                    replaced_count += 1
+                    logger.debug(f"   ✅ Replaced base64 image: {alt_text} -> {rustfs_url}")
+                    return f'<img src="{rustfs_url}" alt="{alt_text}">'
+                # 如果找不到，尝试找相似的文件名
+                for filename, url in url_mapping.items():
+                    if alt_text in filename or filename in alt_text:
+                        replaced_count += 1
+                        logger.debug(f"   ✅ Replaced base64 image (similar): {alt_text} -> {url}")
+                        return f'<img src="{url}" alt="{alt_text}">'
+                # 找不到对应的图片，删除无效的 base64 引用
+                logger.warning(f"   ⚠️  No matching file for base64 image: {alt_text}")
+                return f'<img src="" alt="{alt_text}">'
+
+            content = re.sub(base64_pattern, replace_base64_image, content)
+
             # 替换所有图片引用（统一转换为 HTML 格式，更通用）
             for filename, url in url_mapping.items():
                 # 方式1: Markdown 格式 -> HTML 格式

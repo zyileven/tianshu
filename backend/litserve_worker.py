@@ -9,6 +9,7 @@ Worker 主动循环拉取任务并处理
 """
 
 import os
+import re
 import json
 import sys
 import time
@@ -657,19 +658,15 @@ class MinerUWorkerAPI(ls.LitAPI):
                     logger.info(f"📝 [Auto] Processing Markdown file: {file_path}")
                     result = self._process_markdown(file_path, options)
 
-                # 7.5 新格式 Office 文件 (docx/xlsx/pptx) - 图片上传 RustFS
+                # 7.5 新格式 Office 文件 (docx/xlsx/pptx) - 原生解析，图片保留位置并上传 RustFS
                 elif file_ext in [".docx", ".xlsx", ".pptx"]:
                     if options.get("convert_office_to_pdf", False):
                         logger.info(f"📄 [Auto] Converting Office to PDF: {file_path}")
                         pdf_path = self._convert_office_to_pdf(file_path)
                         result = self._process_with_mineru(pdf_path, options)
-                    elif self.markitdown:
-                        logger.info(f"📄 [Auto] Processing Office file with RustFS image upload: {file_path}")
-                        result = self._process_office(file_path, options)
                     else:
-                        logger.warning(f"⚠️  MarkItDown not available, falling back to PDF conversion")
-                        pdf_path = self._convert_office_to_pdf(file_path)
-                        result = self._process_with_mineru(pdf_path, options)
+                        logger.info(f"📄 [Auto] Processing Office file (native parser): {file_path}")
+                        result = self._process_office(file_path, options)
 
                 # 7.6 旧格式 Office 文件 (doc/xls/ppt) - 转为 PDF 处理
                 elif file_ext in [".doc", ".xls", ".ppt"]:
@@ -928,14 +925,8 @@ class MinerUWorkerAPI(ls.LitAPI):
                 "rustfs_urls": Dict  # {原始src: rustfs_url}
             }
         """
-        from utils.docx_image_extractor import (
-            extract_images_from_office,
-            get_image_rels_mapping,
-        )
+        from utils.office_to_markdown import office_to_markdown
         from utils.markdown_image_extractor import chunk_markdown_by_heading
-
-        if not self.markitdown:
-            raise RuntimeError("MarkItDown is not available")
 
         file_ext = Path(file_path).suffix.lower()
 
@@ -943,56 +934,20 @@ class MinerUWorkerAPI(ls.LitAPI):
         output_dir.mkdir(parents=True, exist_ok=True)
         images_dir = output_dir / "images"
 
-        result = self.markitdown.convert(file_path)
-        markdown_content = result.text_content
+        try:
+            from storage import RustFSClient
+            rustfs_client = RustFSClient()
+        except Exception as e:
+            logger.warning(f"⚠️  RustFS not available: {e}")
+            rustfs_client = None
 
-        images = []
-        if file_ext in [".docx", ".xlsx", ".pptx"]:
-            try:
-                image_names = extract_images_from_office(file_path, str(images_dir))
+        markdown_content, images = office_to_markdown(
+            file_path=file_path,
+            images_dir=str(images_dir),
+            rustfs_client=rustfs_client,
+        )
 
-                if image_names:
-                    logger.info(f"🖼️  Extracted {len(image_names)} images from {file_ext.upper()}")
-
-                    try:
-                        from storage import RustFSClient
-
-                        rustfs_client = RustFSClient()
-                    except Exception as e:
-                        logger.warning(f"⚠️  RustFS not available: {e}")
-                        rustfs_client = None
-
-                    for img_name in image_names:
-                        img_path = images_dir / img_name
-                        rustfs_url = None
-                        if rustfs_client and img_path.exists():
-                            try:
-                                rustfs_url = rustfs_client.upload_file(str(img_path))
-                                logger.debug(f"✅ Uploaded to RustFS: {img_name}")
-                            except Exception as e:
-                                logger.warning(f"⚠️  Failed to upload {img_name}: {e}")
-
-                        images.append(
-                            {
-                                "original": f"![]({img_name})",
-                                "src": img_name,
-                                "alt": img_name,
-                                "local_path": str(img_path),
-                                "rustfs_url": rustfs_url,
-                            }
-                        )
-
-            except Exception as e:
-                logger.warning(f"⚠️  Failed to extract images from {file_ext.upper()}: {e}")
-
-        for img in images:
-            if img["rustfs_url"]:
-                markdown_content = markdown_content.replace(
-                    f"![]({img['src']})", f'<img src="{img["rustfs_url"]}" alt="{img["alt"]}">'
-                )
-                markdown_content = markdown_content.replace(
-                    f"![{img['alt']}]({img['src']})", f'<img src="{img["rustfs_url"]}" alt="{img["alt"]}">'
-                )
+        logger.info(f"📄 Office processed: {len(images)} images extracted and uploaded")
 
         result_file = output_dir / "result.md"
         result_file.write_text(markdown_content, encoding="utf-8")
@@ -1010,8 +965,6 @@ class MinerUWorkerAPI(ls.LitAPI):
         )
 
         rustfs_urls = {img["src"]: img["rustfs_url"] for img in images if img["rustfs_url"]}
-
-        logger.info(f"📄 Office processed: {len(images)} images extracted")
 
         return {
             "result_path": str(output_dir),
