@@ -546,7 +546,7 @@ async def get_task_images(
             continue
         try:
             relative_path = img_file.relative_to(OUTPUT_DIR)
-            download_url = f"/v1/files/output/{relative_path}"
+            download_url = f"/v1/files/output/{relative_path.as_posix()}"
         except ValueError:
             logger.warning(f"⚠️  Image file outside OUTPUT_DIR, skipping: {img_file}")
             continue

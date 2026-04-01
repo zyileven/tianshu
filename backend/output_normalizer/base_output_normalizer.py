@@ -3,7 +3,7 @@
 """
 
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from loguru import logger
 import re
 import json
@@ -26,7 +26,7 @@ class BaseOutputNormalizer:
         """
         self._rustfs_client = None
 
-    def normalize(self, output_dir: Path, use_rustfs: bool = None) -> Dict[str, Any]:
+    def normalize(self, output_dir: Path, use_rustfs: Optional[bool] = None) -> Dict[str, Any]:
         """
         规范化输出目录（模板方法）
 
@@ -89,7 +89,7 @@ class BaseOutputNormalizer:
         """
         raise NotImplementedError
 
-    def _process_rustfs_upload(self, result: Dict[str, Any], use_rustfs: bool = None):
+    def _process_rustfs_upload(self, result: Dict[str, Any], use_rustfs: Optional[bool] = None):
         """处理 RustFS 上传和 URL 替换
 
         Args:

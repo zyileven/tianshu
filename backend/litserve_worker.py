@@ -869,9 +869,12 @@ class MinerUWorkerAPI(ls.LitAPI):
         images_dir = output_dir / "images"
 
         try:
-            from storage import RustFSClient
-
-            rustfs_client = RustFSClient()
+            use_rustfs = (options or {}).get("use_rustfs")
+            if use_rustfs is False:
+                rustfs_client = None
+            else:
+                from storage import RustFSClient
+                rustfs_client = RustFSClient()
         except Exception as e:
             logger.warning(f"⚠️  RustFS not available: {e}")
             rustfs_client = None

@@ -17,7 +17,7 @@
 """
 
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from loguru import logger
 
 from .base_output_normalizer import BaseOutputNormalizer
@@ -29,7 +29,7 @@ _standard_normalizer = StandardOutputNormalizer()
 _paddleocr_normalizer = PaddleOCROutputNormalizer()
 
 
-def normalize_output(output_dir: Path, handle_method="standard", use_rustfs: bool = None) -> Dict[str, Any]:
+def normalize_output(output_dir: Path, handle_method="standard", use_rustfs: Optional[bool] = None) -> Dict[str, Any]:
     """
     便捷函数：规范化输出目录
 
