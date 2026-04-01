@@ -538,11 +538,30 @@ async def get_task_images(
             "total": 0,
         }
 
+    # 从 result.md 中提取被引用的图片文件名，只返回实际使用的图片
+    referenced_filenames = set()
+    md_file = result_dir / "result.md"
+    if md_file.exists():
+        try:
+            md_content = md_file.read_text(encoding="utf-8")
+            # 匹配 Markdown 语法: ![alt](url)
+            for match in re.finditer(r'!\[[^\]]*\]\(([^)]+)\)', md_content):
+                referenced_filenames.add(Path(match.group(1).split("?")[0]).name)
+            # 匹配 HTML img 标签: <img src="url">
+            for match in re.finditer(r'<img\s+[^>]*src="([^"]+)"[^>]*>', md_content):
+                referenced_filenames.add(Path(match.group(1).split("?")[0]).name)
+            logger.info(f"📄 Found {len(referenced_filenames)} referenced images in result.md")
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to parse result.md for image refs: {e}")
+
     image_extensions = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg"}
     images = []
 
     for img_file in sorted(image_dir.iterdir()):
         if not img_file.is_file() or img_file.suffix.lower() not in image_extensions:
+            continue
+        # 如果解析到了 MD 引用，只返回被引用的图片
+        if referenced_filenames and img_file.name not in referenced_filenames:
             continue
         try:
             relative_path = img_file.relative_to(OUTPUT_DIR)
@@ -557,7 +576,7 @@ async def get_task_images(
             "size": img_file.stat().st_size,
         })
 
-    logger.info(f"📸 Task {task_id}: found {len(images)} images")
+    logger.info(f"📸 Task {task_id}: found {len(images)} images (referenced in markdown)")
 
     return {
         "success": True,

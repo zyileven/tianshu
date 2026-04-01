@@ -51,23 +51,29 @@ show_usage() {
     echo "  file_spec     File specification (required)"
     echo ""
     echo "File Specification:"
-    echo "  backend       后端镜像 (tianshu-backend-amd64.tar.gz)"
+    echo "  backend-deps  【增量流程初始化】上传依赖层镜像并加载 (tianshu-backend-deps-amd64.tar.gz, ~10GB)"
+    echo "                只需做一次，之后代码更新用 backend-code 即可"
+    echo "  backend-code  【日常代码更新】上传代码包，在服务器上 build+重启 (tianshu-backend-code-update.tar.gz, <10MB)"
+    echo "                前提：服务器已加载 tianshu-backend-deps:latest"
+    echo "  backend       全量后端镜像 (tianshu-backend-amd64.tar.gz，用于首次部署或依赖变更)"
     echo "  frontend      前端镜像 (tianshu-frontend-amd64.tar.gz)"
     echo "  rustfs        RustFS 镜像 (rustfs-amd64.tar.gz)"
     echo "  models        模型文件 (models-offline.tar.gz)"
     echo "  config        配置文件 (.env.example, docker-compose.yml 等)"
     echo ""
     echo "Examples:"
-    echo "  # 只上传后端镜像"
+    echo "  # 【推荐】日常代码更新（先 build-offline.sh --code-only）"
+    echo "  $0 root 192.168.1.100 /opt/tianshu backend-code"
+    echo ""
+    echo "  # 首次切换到增量更新流程（先 build-offline.sh --deps-only）"
+    echo "  $0 root 192.168.1.100 /opt/tianshu backend-deps"
+    echo ""
+    echo "  # 首次全量部署（先 build-offline.sh）"
     echo "  $0 root 192.168.1.100 /opt/tianshu backend"
     echo ""
-    echo "  # 只上传前端镜像"
+    echo "  # 其他"
     echo "  $0 root 192.168.1.100 /opt/tianshu frontend"
-    echo ""
-    echo "  # 只上传配置文件"
     echo "  $0 root 192.168.1.100 /opt/tianshu config"
-    echo ""
-    echo "  # 只上传模型文件"
     echo "  $0 root 192.168.1.100 /opt/tianshu models"
     echo ""
 }
@@ -85,7 +91,7 @@ check_arguments() {
 
     # 验证 file_spec
     case "$FILE_SPEC" in
-        backend|frontend|rustfs|models|config)
+        backend-deps|backend-code|backend|frontend|rustfs|models|config)
             ;;
         *)
             log_error "无效的文件规格: $FILE_SPEC"
@@ -103,6 +109,12 @@ get_file_info() {
     local file_spec=$1
 
     case "$file_spec" in
+        backend-deps)
+            echo "tianshu-backend-deps-amd64.tar.gz"
+            ;;
+        backend-code)
+            echo "tianshu-backend-code-update.tar.gz"
+            ;;
         backend)
             echo "tianshu-backend-amd64.tar.gz"
             ;;
@@ -172,95 +184,78 @@ upload_file() {
 # ============================================================================
 server_operations() {
     local file_spec=$1
+    local file_info=$(get_file_info "$file_spec")
 
-    # 如果是镜像文件，询问是否加载并重启
+    echo ""
+    log_info "📋 请在服务器上手动执行以下命令："
+    echo ""
+
     case "$file_spec" in
-        backend|frontend|rustfs)
+        backend-deps)
+            log_info "加载依赖层镜像（无需重启服务，约 5-10 分钟）："
             echo ""
-            read -p "是否在服务器上重新加载镜像？(y/n) " -n 1 -r
-            echo
-            if [[ $REPLY =~ ^[Yy]$ ]]; then
-                local file_info=$(get_file_info "$file_spec")
-                log_info "♻️  加载镜像..."
-
-                ssh "${SERVER_USER}@${SERVER_HOST}" << EOF
-                    cd ${SERVER_PATH}
-                    docker load < ${file_info}
-                    echo "✓ 镜像加载完成"
-EOF
-                log_success "镜像已加载"
-                echo ""
-
-                # 询问是否重启服务
-                read -p "是否重启相关服务？(y/n) " -n 1 -r
-                echo
-                if [[ $REPLY =~ ^[Yy]$ ]]; then
-                    log_info "♻️  重启服务..."
-
-                    local services=""
-                    case "$file_spec" in
-                        backend)
-                            services="backend worker"
-                            ;;
-                        frontend)
-                            services="frontend"
-                            ;;
-                        rustfs)
-                            services="rustfs"
-                            ;;
-                    esac
-
-                    ssh "${SERVER_USER}@${SERVER_HOST}" << EOF
-                        cd ${SERVER_PATH}
-                        docker-compose restart ${services}
-                        echo "✓ 服务重启完成"
-EOF
-                    log_success "服务已重启"
-                else
-                    log_info "跳过重启，请手动执行："
-                    echo "  ssh ${SERVER_USER}@${SERVER_HOST}"
-                    echo "  cd ${SERVER_PATH}"
-                    echo "  docker-compose restart ${services}"
-                fi
-            else
-                log_info "跳过加载，请手动执行："
-                echo "  ssh ${SERVER_USER}@${SERVER_HOST}"
-                echo "  cd ${SERVER_PATH}"
-                echo "  docker load < $(get_file_info "$file_spec")"
-                echo "  docker-compose restart ..."
-            fi
-            ;;
-        models)
-            echo ""
-            log_warning "模型文件已上传，需要重新部署才能生效："
-            echo "  1. 删除现有的 models-offline 目录"
-            echo "  2. 解压新的 models-offline.tar.gz"
-            echo "  3. 删除 Docker 卷中的 .models_initialized 标记"
-            echo "  4. 重启 worker 服务"
-            echo ""
-            read -p "是否执行上述操作？(y/n) " -n 1 -r
-            echo
-            if [[ $REPLY =~ ^[Yy]$ ]]; then
-                log_info "♻️  更新模型..."
-                ssh "${SERVER_USER}@${SERVER_HOST}" << EOF
-                    cd ${SERVER_PATH}
-                    rm -rf models-offline
-                    tar xzf models-offline.tar.gz
-                    docker-compose exec -T worker rm -f /root/.cache/.models_initialized
-                    docker-compose restart worker
-                    echo "✓ 模型更新完成"
-EOF
-                log_success "模型已更新"
-            fi
-            ;;
-        config)
-            echo ""
-            log_info "配置文件已上传"
-            log_warning "如果修改了 .env 或 docker-compose.yml，需要重新启动服务："
-            echo "  ssh ${SERVER_USER}@${SERVER_HOST}"
             echo "  cd ${SERVER_PATH}"
-            echo "  docker-compose down"
-            echo "  docker-compose up -d"
+            echo "  sudo docker load < ${file_info}"
+            echo "  rm -f ${file_info}"
+            echo ""
+            log_info "完成后即可使用 backend-code 进行日常代码更新："
+            echo ""
+            echo "  bash scripts/build-offline.sh --code-only"
+            echo "  bash scripts/upload-spec-to-server.sh ${SERVER_USER} ${SERVER_HOST} ${SERVER_PATH} backend-code"
+            ;;
+
+        backend-code)
+            log_info "构建新镜像并重启服务（在 ${SERVER_PATH} 下执行，约 1-2 分钟）："
+            echo ""
+            echo "  rm -rf /tmp/tianshu-update && mkdir -p /tmp/tianshu-update"
+            echo "  tar xzf ${file_info} -C /tmp/tianshu-update/"
+            echo "  sudo docker build -f /tmp/tianshu-update/Dockerfile.code -t tianshu-backend:latest /tmp/tianshu-update/"
+            echo "  sudo docker-compose up -d --no-deps backend worker"
+            echo "  rm -rf /tmp/tianshu-update ${file_info}"
+            ;;
+
+        backend)
+            log_info "加载镜像并重启后端服务："
+            echo ""
+            echo "  cd ${SERVER_PATH}"
+            echo "  sudo docker load < ${file_info}"
+            echo "  sudo docker-compose up -d --no-deps backend worker"
+            echo "  rm -f ${file_info}"
+            ;;
+
+        frontend)
+            log_info "加载镜像并重启前端服务："
+            echo ""
+            echo "  cd ${SERVER_PATH}"
+            echo "  sudo docker load < ${file_info}"
+            echo "  sudo docker-compose restart frontend"
+            echo "  rm -f ${file_info}"
+            ;;
+
+        rustfs)
+            log_info "加载镜像并重启对象存储服务："
+            echo ""
+            echo "  cd ${SERVER_PATH}"
+            echo "  sudo docker load < ${file_info}"
+            echo "  sudo docker-compose restart rustfs"
+            echo "  rm -f ${file_info}"
+            ;;
+
+        models)
+            log_info "更新模型文件并重启 worker："
+            echo ""
+            echo "  cd ${SERVER_PATH}"
+            echo "  rm -rf models-offline"
+            echo "  tar xzf models-offline.tar.gz"
+            echo "  sudo docker-compose exec -T worker rm -f /root/.cache/.models_initialized"
+            echo "  sudo docker-compose restart worker"
+            ;;
+
+        config)
+            log_info "配置文件已上传，如修改了 .env 或 docker-compose.yml 需重启服务："
+            echo ""
+            echo "  cd ${SERVER_PATH}"
+            echo "  sudo docker-compose down && sudo docker-compose up -d"
             ;;
     esac
 }

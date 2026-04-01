@@ -1,0 +1,45 @@
+# 代码层镜像 - 用于增量更新，不重新安装依赖
+#
+# 前提：服务器已加载 tianshu-backend-deps:latest
+#
+# 构建方式（在服务器上执行）:
+#   tar xzf tianshu-backend-code-update.tar.gz -C /tmp/tianshu-update/
+#   cd /tmp/tianshu-update
+#   docker build -f Dockerfile.code -t tianshu-backend:latest .
+#
+# 推荐使用脚本自动完成上传+构建+重启：
+#   bash scripts/build-offline.sh --code-only
+#   bash scripts/upload-spec-to-server.sh root 192.168.1.100 /opt/tianshu backend-code
+
+FROM tianshu-backend-deps:latest
+
+# 创建应用目录
+WORKDIR /app
+
+# 复制后端代码（覆盖旧版本）
+COPY backend/ /app/backend/
+COPY pyproject.toml /app/
+
+# 复制启动脚本
+COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY scripts/init-models.sh /usr/local/bin/init-models.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/init-models.sh
+
+# 创建必要的目录
+RUN mkdir -p /app/models /app/data /app/uploads /app/output /app/logs
+
+# 设置工作目录为后端
+WORKDIR /app/backend
+
+# 暴露端口
+# 8000: API Server
+# 8001: LitServe Worker
+# 8002: MCP Server
+EXPOSE 8000 8001 8002
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["api", "python", "api_server.py"]
