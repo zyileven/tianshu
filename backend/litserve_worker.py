@@ -677,7 +677,7 @@ class MinerUWorkerAPI(ls.LitAPI):
                 # 7.7 其他文本文件 (html/txt/csv) 使用 MarkItDown
                 elif file_ext in [".html", ".txt", ".csv"] and self.markitdown:
                     logger.info(f"📄 [Auto] Processing text file with MarkItDown: {file_path}")
-                    result = self._process_with_markitdown(file_path)
+                    result = self._process_with_markitdown(file_path, options=options)
 
                 else:
                     # 没有合适的处理器
@@ -787,7 +787,7 @@ class MinerUWorkerAPI(ls.LitAPI):
         # 注意：result["result_path"] 是实际包含 md 文件的目录（例如 {output_dir}/{file_name}/auto/）
         # 我们需要在这个result["result_path"] 上运行 normalize_output
         actual_output_dir = Path(result["result_path"])
-        normalize_output(actual_output_dir)
+        normalize_output(actual_output_dir, use_rustfs=options.get("use_rustfs"))
 
         # MinerU Pipeline 返回结构：
         return {
@@ -797,7 +797,7 @@ class MinerUWorkerAPI(ls.LitAPI):
             "json_content": result.get("json_content"),
         }
 
-    def _process_with_markitdown(self, file_path: str) -> dict:
+    def _process_with_markitdown(self, file_path: str, options: dict = None) -> dict:
         """使用 MarkItDown 处理 Office 文档（增强版：支持 DOCX 图片提取）"""
         if not self.markitdown:
             raise RuntimeError("MarkItDown is not available")
@@ -834,7 +834,7 @@ class MinerUWorkerAPI(ls.LitAPI):
         output_file.write_text(markdown_content, encoding="utf-8")
 
         # 规范化输出（统一文件名和目录结构）
-        normalize_output(output_dir)
+        normalize_output(output_dir, use_rustfs=(options or {}).get("use_rustfs"))
 
         # 返回目录路径（与其他引擎保持一致）
         return {"result_path": str(output_dir), "content": markdown_content}
@@ -1081,7 +1081,7 @@ class MinerUWorkerAPI(ls.LitAPI):
         result = self.paddleocr_vl_engine.parse(file_path, output_path=str(output_dir))
 
         # 规范化输出（统一文件名和目录结构）
-        normalize_output(output_dir)
+        normalize_output(output_dir, use_rustfs=options.get("use_rustfs"))
 
         # 返回结果
         return {"result_path": str(output_dir), "content": result.get("markdown", "")}
@@ -1115,7 +1115,7 @@ class MinerUWorkerAPI(ls.LitAPI):
         result = self.paddleocr_vl_vllm_engine.parse(file_path, output_path=str(output_dir))
 
         # 规范化输出（统一文件名和目录结构）
-        normalize_output(output_dir, handle_method="paddleocr-vl")
+        normalize_output(output_dir, handle_method="paddleocr-vl", use_rustfs=options.get("use_rustfs"))
 
         # 返回结果
         return {"result_path": str(output_dir), "content": result.get("markdown", "")}
@@ -1150,7 +1150,7 @@ class MinerUWorkerAPI(ls.LitAPI):
         )
 
         # 规范化输出（统一文件名和目录结构）
-        normalize_output(output_dir)
+        normalize_output(output_dir, use_rustfs=options.get("use_rustfs"))
 
         # SenseVoice 返回结构：
         # {
@@ -1201,7 +1201,7 @@ class MinerUWorkerAPI(ls.LitAPI):
         output_file.write_text(result["markdown"], encoding="utf-8")
 
         # 规范化输出（统一文件名和目录结构）
-        normalize_output(output_dir)
+        normalize_output(output_dir, use_rustfs=options.get("use_rustfs"))
 
         return {"result_path": str(output_dir), "content": result["markdown"]}
 
@@ -1482,8 +1482,9 @@ class MinerUWorkerAPI(ls.LitAPI):
                 json_output.write_text(json.dumps(merged_json, indent=2, ensure_ascii=False), encoding="utf-8")
                 logger.info(f"📄 Merged JSON saved: {json_output}")
 
-            # 规范化输出
-            normalize_output(parent_output_dir)
+            # 规范化输出（继承父任务的 use_rustfs 设置）
+            parent_options = json.loads(parent_task.get("options", "{}"))
+            normalize_output(parent_output_dir, use_rustfs=parent_options.get("use_rustfs"))
 
             # 更新父任务状态
             self.task_db.update_task_status(
@@ -1596,7 +1597,7 @@ class MinerUWorkerAPI(ls.LitAPI):
 
         # 规范化输出（统一文件名和目录结构）
         # Format Engine 已经输出标准格式，但仍然调用规范化器以确保一致性
-        normalize_output(output_dir)
+        normalize_output(output_dir, use_rustfs=options.get("use_rustfs"))
 
         return {
             "result_path": str(output_dir),  # 返回任务专属目录

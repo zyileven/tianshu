@@ -211,6 +211,11 @@ async def submit_task(
         False,
         description="是否将 Office 文件转换为 PDF 后再处理（图片提取更完整，但速度较慢）"
     ),
+    # 图片存储参数
+    use_rustfs: bool = Form(
+        True,
+        description="是否将解析出的图片上传到 RustFS 对象存储。False 时图片保留在本地，可通过 /v1/files/output/ 接口下载"
+    ),
     # 认证依赖
     current_user: User = Depends(require_permission(Permission.TASK_SUBMIT)),
 ):
@@ -262,6 +267,8 @@ async def submit_task(
             "watermark_dilation": watermark_dilation,
             # Office 转 PDF 参数
             "convert_office_to_pdf": convert_office_to_pdf,
+            # 图片存储
+            "use_rustfs": use_rustfs,
         }
 
         # 创建任务（PDF 拆分逻辑由 Worker 处理）
@@ -475,6 +482,90 @@ async def get_task_status(
         logger.info(f"ℹ️  Task status is {task['status']}, skipping content loading")
 
     return response
+
+
+@app.get("/api/v1/tasks/{task_id}/images", tags=["任务管理"])
+async def get_task_images(
+    task_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    获取任务解析结果中的所有图片列表
+
+    返回图片文件名和下载 URL，供外部系统（如 SuperRAG）下载图片到本地存储。
+    仅在任务状态为 completed 时返回图片信息。
+
+    下载 URL 格式：/v1/files/output/{相对路径}/{filename}
+    """
+    task = db.get_task(task_id)
+
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # 权限检查：用户只能查看自己的任务，管理员可以查看所有任务
+    if not current_user.has_permission(Permission.TASK_VIEW_ALL):
+        if task.get("user_id") != current_user.user_id:
+            raise HTTPException(status_code=403, detail="Permission denied: You can only view your own tasks")
+
+    if task["status"] != "completed":
+        return {
+            "success": True,
+            "task_id": task_id,
+            "status": task["status"],
+            "images": [],
+            "total": 0,
+        }
+
+    if not task.get("result_path"):
+        return {
+            "success": True,
+            "task_id": task_id,
+            "status": "completed",
+            "images": [],
+            "total": 0,
+            "message": "Result files have been cleaned up",
+        }
+
+    result_dir = Path(task["result_path"])
+    image_dir = result_dir / "images"
+
+    if not image_dir.exists():
+        return {
+            "success": True,
+            "task_id": task_id,
+            "status": "completed",
+            "images": [],
+            "total": 0,
+        }
+
+    image_extensions = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg"}
+    images = []
+
+    for img_file in sorted(image_dir.iterdir()):
+        if not img_file.is_file() or img_file.suffix.lower() not in image_extensions:
+            continue
+        try:
+            relative_path = img_file.relative_to(OUTPUT_DIR)
+            download_url = f"/v1/files/output/{relative_path}"
+        except ValueError:
+            logger.warning(f"⚠️  Image file outside OUTPUT_DIR, skipping: {img_file}")
+            continue
+
+        images.append({
+            "filename": img_file.name,
+            "download_url": str(download_url),
+            "size": img_file.stat().st_size,
+        })
+
+    logger.info(f"📸 Task {task_id}: found {len(images)} images")
+
+    return {
+        "success": True,
+        "task_id": task_id,
+        "status": "completed",
+        "images": images,
+        "total": len(images),
+    }
 
 
 @app.delete("/api/v1/tasks/{task_id}", tags=["任务管理"])
