@@ -11,7 +11,7 @@ SERVER_USER="${1:-serverName}"
 SERVER_HOST="${2:-100.200.300.400}"
 SERVER_PATH="${3:-~/serverDir}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOCAL_DIR="$(dirname "${SCRIPT_DIR}")/docker-images"
+LOCAL_DIR="$(dirname "$(dirname "${SCRIPT_DIR}")")/docker-images"
 TEMP_DIR="${SCRIPT_DIR}/.upload_temp"
 
 # 颜色输出

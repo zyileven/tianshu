@@ -12,7 +12,7 @@ SERVER_HOST="${2}"
 SERVER_PATH="${3}"
 FILE_SPEC="${4}"  # 指定要上传的文件: backend, frontend, rustfs, models, config
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOCAL_DIR="$(dirname "${SCRIPT_DIR}")/docker-images"
+LOCAL_DIR="$(dirname "$(dirname "${SCRIPT_DIR}")")/docker-images"
 
 # 颜色输出
 RED='\033[0;31m'
@@ -200,8 +200,8 @@ server_operations() {
             echo ""
             log_info "完成后即可使用 backend-code 进行日常代码更新："
             echo ""
-            echo "  bash scripts/build-offline.sh --code-only"
-            echo "  bash scripts/upload-spec-to-server.sh ${SERVER_USER} ${SERVER_HOST} ${SERVER_PATH} backend-code"
+            echo "  bash deploy/docker/build-offline.sh --code-only"
+            echo "  bash deploy/docker/upload-spec-to-server.sh ${SERVER_USER} ${SERVER_HOST} ${SERVER_PATH} backend-code"
             ;;
 
         backend-code)

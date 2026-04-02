@@ -8,8 +8,8 @@
 #   docker build -f Dockerfile.code -t tianshu-backend:latest .
 #
 # 推荐使用脚本自动完成上传+构建+重启：
-#   bash scripts/build-offline.sh --code-only
-#   bash scripts/upload-spec-to-server.sh root 192.168.1.100 /opt/tianshu backend-code
+#   bash deploy/docker/build-offline.sh --code-only
+#   bash deploy/docker/upload-spec-to-server.sh root 192.168.1.100 /opt/tianshu backend-code
 
 FROM tianshu-backend-deps:latest
 

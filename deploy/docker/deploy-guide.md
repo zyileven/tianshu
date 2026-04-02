@@ -2,6 +2,8 @@
 
 ## 部署包内容
 
+构建包会将文件输出在 docker-images 文件中，包含以下内容：
+
 | 文件 | 说明 | 大小 |
 |------|------|------|
 | `tianshu-backend-amd64.tar.gz` | 后端完整镜像（首次全量部署用） | ~10GB |
@@ -58,7 +60,7 @@ tianshu-backend:latest       ← 完整镜像（deps 层 + 代码层）
 
 ```bash
 # 全量构建（约 60-90 分钟）
-bash scripts/build-offline.sh
+bash deploy/docker/build-offline.sh
 ```
 
 输出目录：`docker-images/`，包含所有镜像和配置文件。
@@ -66,7 +68,8 @@ bash scripts/build-offline.sh
 ### 2. 开发机：上传到服务器
 
 ```bash
-bash scripts/upload-all-to-server.sh root YOUR_SERVER_IP /opt/tianshu
+bash deploy/docker/upload-all-to-server.sh root YOUR_SERVER_IP /opt/tianshu 
+# ⚠️注意：这个/opt/tianshu地址部署时根据实际情况来定
 ```
 
 ### 3. 服务器：执行部署
@@ -74,6 +77,7 @@ bash scripts/upload-all-to-server.sh root YOUR_SERVER_IP /opt/tianshu
 ```bash
 ssh root@YOUR_SERVER_IP
 cd /opt/tianshu
+# ⚠️注意：这个/opt/tianshu地址部署时根据实际情况来定
 bash deploy-offline.sh
 ```
 
@@ -110,7 +114,7 @@ http://YOUR_SERVER_IP
 
 ```bash
 # 本地有缓存时很快（几分钟）
-bash scripts/build-offline.sh --deps-only
+bash deploy/docker/build-offline.sh --deps-only
 ```
 
 输出：`docker-images/tianshu-backend-deps-amd64.tar.gz`
@@ -118,13 +122,15 @@ bash scripts/build-offline.sh --deps-only
 ### 2. 开发机：上传到服务器
 
 ```bash
-bash scripts/upload-spec-to-server.sh root YOUR_SERVER_IP /opt/tianshu backend-deps
+bash deploy/docker/upload-spec-to-server.sh root YOUR_SERVER_IP /opt/tianshu backend-deps
+# ⚠️注意：这个/opt/tianshu地址部署时根据实际情况来定
 ```
 
 ### 3. 服务器：加载镜像
 
 ```bash
 cd /opt/tianshu
+# ⚠️注意：这个/opt/tianshu地址部署时根据实际情况来定
 sudo docker load < tianshu-backend-deps-amd64.tar.gz
 rm -f tianshu-backend-deps-amd64.tar.gz
 ```
@@ -142,7 +148,7 @@ rm -f tianshu-backend-deps-amd64.tar.gz
 ### 1. 开发机：打包代码
 
 ```bash
-bash scripts/build-offline.sh --code-only
+bash deploy/docker/build-offline.sh --code-only
 ```
 
 耗时约 10 秒，输出：`docker-images/tianshu-backend-code-update.tar.gz`（< 10MB）
@@ -150,7 +156,8 @@ bash scripts/build-offline.sh --code-only
 ### 2. 开发机：上传到服务器
 
 ```bash
-bash scripts/upload-spec-to-server.sh root YOUR_SERVER_IP /opt/tianshu backend-code
+bash deploy/docker/upload-spec-to-server.sh root YOUR_SERVER_IP /opt/tianshu backend-code
+# ⚠️注意：这个/opt/tianshu地址部署时根据实际情况来定
 ```
 
 ### 3. 服务器：构建镜像并重启
@@ -175,13 +182,15 @@ rm -rf /tmp/tianshu-update tianshu-backend-code-update.tar.gz
 
 开发机：
 ```bash
-bash scripts/build-offline.sh
-bash scripts/upload-spec-to-server.sh root YOUR_SERVER_IP /opt/tianshu frontend
+bash deploy/docker/build-offline.sh
+bash deploy/docker/upload-spec-to-server.sh root YOUR_SERVER_IP /opt/tianshu frontend
+# ⚠️注意：这个/opt/tianshu地址部署时根据实际情况来定
 ```
 
 服务器：
 ```bash
 cd /opt/tianshu
+# ⚠️注意：这个/opt/tianshu地址部署时根据实际情况来定
 sudo docker load < tianshu-frontend-amd64.tar.gz
 sudo docker-compose restart frontend
 rm -f tianshu-frontend-amd64.tar.gz
@@ -191,12 +200,14 @@ rm -f tianshu-frontend-amd64.tar.gz
 
 开发机：
 ```bash
-bash scripts/upload-spec-to-server.sh root YOUR_SERVER_IP /opt/tianshu config
+bash deploy/docker/upload-spec-to-server.sh root YOUR_SERVER_IP /opt/tianshu config
+# ⚠️注意：这个/opt/tianshu地址部署时根据实际情况来定
 ```
 
 服务器（修改了 `.env` 或 `docker-compose.yml` 时）：
 ```bash
 cd /opt/tianshu
+# ⚠️注意：这个/opt/tianshu地址部署时根据实际情况来定
 sudo docker-compose down && sudo docker-compose up -d
 ```
 
@@ -204,12 +215,14 @@ sudo docker-compose down && sudo docker-compose up -d
 
 开发机：
 ```bash
-bash scripts/upload-spec-to-server.sh root YOUR_SERVER_IP /opt/tianshu models
+bash deploy/docker/upload-spec-to-server.sh root YOUR_SERVER_IP /opt/tianshu models
+# ⚠️注意：这个/opt/tianshu地址部署时根据实际情况来定
 ```
 
 服务器：
 ```bash
 cd /opt/tianshu
+# ⚠️注意：这个/opt/tianshu地址部署时根据实际情况来定
 rm -rf models-offline
 tar xzf models-offline.tar.gz
 sudo docker-compose exec -T worker rm -f /root/.cache/.models_initialized
@@ -222,17 +235,20 @@ sudo docker-compose restart worker
 
 开发机：
 ```bash
-bash scripts/build-offline.sh
-bash scripts/upload-spec-to-server.sh root YOUR_SERVER_IP /opt/tianshu backend
+bash deploy/docker/build-offline.sh
+bash deploy/docker/upload-spec-to-server.sh root YOUR_SERVER_IP /opt/tianshu backend
+# ⚠️注意：这个/opt/tianshu地址部署时根据实际情况来定
 
 # 同时更新 deps 层供后续增量使用
-bash scripts/build-offline.sh --deps-only
-bash scripts/upload-spec-to-server.sh root YOUR_SERVER_IP /opt/tianshu backend-deps
+bash deploy/docker/build-offline.sh --deps-only
+bash deploy/docker/upload-spec-to-server.sh root YOUR_SERVER_IP /opt/tianshu backend-deps
+# ⚠️注意：这个/opt/tianshu地址部署时根据实际情况来定
 ```
 
 服务器：
 ```bash
 cd /opt/tianshu
+# ⚠️注意：这个/opt/tianshu地址部署时根据实际情况来定
 sudo docker load < tianshu-backend-amd64.tar.gz
 sudo docker-compose up -d --no-deps backend worker
 rm -f tianshu-backend-amd64.tar.gz

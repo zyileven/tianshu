@@ -2,18 +2,21 @@
 # Tianshu 离线镜像构建脚本
 #
 # 使用方式:
-#   bash scripts/build-offline.sh              # 全量构建（首次部署）
-#   bash scripts/build-offline.sh --deps-only  # 仅构建依赖层（切换到增量更新流程时用一次）
-#   bash scripts/build-offline.sh --code-only  # 仅打包代码（日常代码更新）
+#   bash deploy/docker/build-offline.sh              # 全量构建（首次部署）
+#   bash deploy/docker/build-offline.sh --deps-only  # 仅构建依赖层（切换到增量更新流程时用一次）
+#   bash deploy/docker/build-offline.sh --code-only  # 仅打包代码（日常代码更新）
 
 set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$(dirname "${SCRIPT_DIR}")")"
 
 # ============================================================================
 # 配置
 # ============================================================================
 PLATFORM="${PLATFORM:-amd64}"
-OUTPUT_DIR="./docker-images"
-MODELS_DIR="./models-offline"
+OUTPUT_DIR="${ROOT_DIR}/docker-images"
+MODELS_DIR="${ROOT_DIR}/models-offline"
 
 # 解析命令行参数
 MODE="full"
@@ -46,7 +49,7 @@ log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 # ============================================================================
 show_usage() {
     echo ""
-    echo "Usage: bash scripts/build-offline.sh [MODE] [OPTIONS]"
+    echo "Usage: bash deploy/docker/build-offline.sh [MODE] [OPTIONS]"
     echo ""
     echo "Modes:"
     echo "  （默认）          全量构建：依赖 + 代码，用于首次部署"
@@ -67,16 +70,16 @@ show_usage() {
     echo ""
     echo "典型工作流:"
     echo "  # 首次部署（或依赖变更时）"
-    echo "  bash scripts/build-offline.sh"
-    echo "  bash scripts/upload-all-to-server.sh root 192.168.1.100 /opt/tianshu"
+    echo "  bash deploy/docker/build-offline.sh"
+    echo "  bash deploy/docker/upload-all-to-server.sh root 192.168.1.100 /opt/tianshu"
     echo ""
     echo "  # 切换到增量更新（一次性操作）"
-    echo "  bash scripts/build-offline.sh --deps-only"
-    echo "  bash scripts/upload-spec-to-server.sh root 192.168.1.100 /opt/tianshu backend-deps"
+    echo "  bash deploy/docker/build-offline.sh --deps-only"
+    echo "  bash deploy/docker/upload-spec-to-server.sh root 192.168.1.100 /opt/tianshu backend-deps"
     echo ""
     echo "  # 日常代码更新（此后每次代码变更）"
-    echo "  bash scripts/build-offline.sh --code-only"
-    echo "  bash scripts/upload-spec-to-server.sh root 192.168.1.100 /opt/tianshu backend-code"
+    echo "  bash deploy/docker/build-offline.sh --code-only"
+    echo "  bash deploy/docker/upload-spec-to-server.sh root 192.168.1.100 /opt/tianshu backend-code"
     echo ""
 }
 
@@ -114,11 +117,11 @@ check_models() {
         fi
 
         python3 -m pip install --quiet huggingface-hub modelscope loguru 2>/dev/null || true
-        python3 backend/download_models.py --output "$MODELS_DIR"
+        python3 "${ROOT_DIR}/backend/download_models.py" --output "$MODELS_DIR"
 
         if [ $? -ne 0 ]; then
             log_error "Model download failed!"
-            log_info "Please run manually: python3 backend/download_models.py --output $MODELS_DIR"
+            log_info "Please run manually: python3 ${ROOT_DIR}/backend/download_models.py --output $MODELS_DIR"
             exit 1
         fi
         log_success "Models downloaded successfully"
@@ -160,10 +163,10 @@ build_full() {
 
     DOCKER_BUILDKIT=1 docker buildx build \
         --platform linux/$PLATFORM \
-        --file backend/Dockerfile.offline \
+        --file "${ROOT_DIR}/backend/Dockerfile.offline" \
         --tag tianshu-backend:latest \
         --load \
-        .
+        "${ROOT_DIR}"
 
     log_success "Backend image built"
     echo ""
@@ -172,11 +175,11 @@ build_full() {
     log_info "🏷️  Also tagging as tianshu-backend-deps:latest for future incremental updates..."
     DOCKER_BUILDKIT=1 docker buildx build \
         --platform linux/$PLATFORM \
-        --file backend/Dockerfile.offline \
+        --file "${ROOT_DIR}/backend/Dockerfile.offline" \
         --target dependencies \
         --tag tianshu-backend-deps:latest \
         --load \
-        .
+        "${ROOT_DIR}"
     log_success "Deps image tagged"
     echo ""
 
@@ -184,10 +187,10 @@ build_full() {
     log_info "📦 Building frontend image..."
     DOCKER_BUILDKIT=1 docker buildx build \
         --platform linux/$PLATFORM \
-        --file frontend/Dockerfile \
+        --file "${ROOT_DIR}/frontend/Dockerfile" \
         --tag tianshu-frontend:latest \
         --load \
-        .
+        "${ROOT_DIR}"
     log_success "Frontend image built"
     echo ""
 
@@ -233,11 +236,11 @@ build_full() {
 
     # 复制配置文件
     log_info "📋 Copying configuration files..."
-    cp docker-compose.offline.yml "$OUTPUT_DIR/docker-compose.yml"
-    cp docker-compose.offline.yml "$OUTPUT_DIR/docker-compose.offline.yml"
-    [ -f ".env.example" ]                  && cp .env.example "$OUTPUT_DIR/"
-    [ -f "scripts/deploy-offline.sh" ]     && cp scripts/deploy-offline.sh "$OUTPUT_DIR/" && chmod +x "$OUTPUT_DIR/deploy-offline.sh"
-    [ -f "mcp_config.example.json" ]       && cp mcp_config.example.json "$OUTPUT_DIR/"
+    cp "${ROOT_DIR}/deploy/docker/docker-compose.offline.yml" "$OUTPUT_DIR/docker-compose.yml"
+    cp "${ROOT_DIR}/deploy/docker/docker-compose.offline.yml" "$OUTPUT_DIR/docker-compose.offline.yml"
+    [ -f "${ROOT_DIR}/.env.example" ]                        && cp "${ROOT_DIR}/.env.example" "$OUTPUT_DIR/"
+    [ -f "${ROOT_DIR}/deploy/docker/deploy-offline.sh" ]     && cp "${ROOT_DIR}/deploy/docker/deploy-offline.sh" "$OUTPUT_DIR/" && chmod +x "$OUTPUT_DIR/deploy-offline.sh"
+    [ -f "${ROOT_DIR}/mcp_config.example.json" ]             && cp "${ROOT_DIR}/mcp_config.example.json" "$OUTPUT_DIR/"
     log_success "Configuration files copied"
     echo ""
 
@@ -264,11 +267,11 @@ build_deps_only() {
 
     DOCKER_BUILDKIT=1 docker buildx build \
         --platform linux/$PLATFORM \
-        --file backend/Dockerfile.offline \
+        --file "${ROOT_DIR}/backend/Dockerfile.offline" \
         --target dependencies \
         --tag tianshu-backend-deps:latest \
         --load \
-        .
+        "${ROOT_DIR}"
 
     log_success "Deps image built: tianshu-backend-deps:latest"
     echo ""
@@ -288,12 +291,12 @@ build_deps_only() {
     echo ""
     log_info "📋 下一步：上传 deps 镜像到服务器（只需做一次）"
     echo ""
-    echo "  bash scripts/upload-spec-to-server.sh root 192.168.1.100 /opt/tianshu backend-deps"
+    echo "  bash deploy/docker/upload-spec-to-server.sh root 192.168.1.100 /opt/tianshu backend-deps"
     echo ""
     log_info "📋 之后每次代码更新只需运行:"
     echo ""
-    echo "  bash scripts/build-offline.sh --code-only"
-    echo "  bash scripts/upload-spec-to-server.sh root 192.168.1.100 /opt/tianshu backend-code"
+    echo "  bash deploy/docker/build-offline.sh --code-only"
+    echo "  bash deploy/docker/upload-spec-to-server.sh root 192.168.1.100 /opt/tianshu backend-code"
     echo ""
 }
 
@@ -307,7 +310,7 @@ build_code_only() {
     echo ""
 
     # 检查 Dockerfile.code
-    if [ ! -f "Dockerfile.code" ]; then
+    if [ ! -f "${ROOT_DIR}/deploy/docker/Dockerfile.code" ]; then
         log_error "Dockerfile.code not found!"
         log_info "Please ensure the file exists in the project root directory."
         exit 1
@@ -320,9 +323,9 @@ build_code_only() {
     else
         log_info "🔍 Verifying Dockerfile.code builds correctly..."
         if DOCKER_BUILDKIT=1 docker build \
-            --file Dockerfile.code \
+            --file "${ROOT_DIR}/deploy/docker/Dockerfile.code" \
             --tag tianshu-backend:latest \
-            . > /dev/null 2>&1; then
+            "${ROOT_DIR}" > /dev/null 2>&1; then
             log_success "Build verification passed"
         else
             log_warning "Local build verification failed (may be platform mismatch on macOS), skipping"
@@ -340,11 +343,11 @@ build_code_only() {
     mkdir -p "$TEMP_DIR/scripts"
 
     # 复制 build context 所需文件
-    cp -r backend "$TEMP_DIR/"
-    cp pyproject.toml "$TEMP_DIR/" 2>/dev/null || true
-    cp Dockerfile.code "$TEMP_DIR/Dockerfile.code"
-    cp scripts/docker-entrypoint.sh "$TEMP_DIR/scripts/"
-    cp scripts/init-models.sh "$TEMP_DIR/scripts/"
+    cp -r "${ROOT_DIR}/backend" "$TEMP_DIR/"
+    cp "${ROOT_DIR}/pyproject.toml" "$TEMP_DIR/" 2>/dev/null || true
+    cp "${ROOT_DIR}/deploy/docker/Dockerfile.code" "$TEMP_DIR/Dockerfile.code"
+    cp "${ROOT_DIR}/scripts/docker-entrypoint.sh" "$TEMP_DIR/scripts/"
+    cp "${ROOT_DIR}/scripts/init-models.sh" "$TEMP_DIR/scripts/"
 
     # 打包
     mkdir -p "$OUTPUT_DIR"
@@ -361,7 +364,7 @@ build_code_only() {
     echo ""
     log_info "📋 上传并部署到服务器:"
     echo ""
-    echo "  bash scripts/upload-spec-to-server.sh root 192.168.1.100 /opt/tianshu backend-code"
+    echo "  bash deploy/docker/upload-spec-to-server.sh root 192.168.1.100 /opt/tianshu backend-code"
     echo ""
     log_info "📋 或手动操作:"
     echo ""
@@ -391,12 +394,12 @@ print_full_summary() {
     echo ""
     log_info "📋 首次部署到服务器:"
     echo ""
-    echo "  bash scripts/upload-all-to-server.sh root 192.168.1.100 /opt/tianshu"
+    echo "  bash deploy/docker/upload-all-to-server.sh root 192.168.1.100 /opt/tianshu"
     echo ""
     log_info "📋 后续代码增量更新（更快）:"
     echo ""
-    echo "  bash scripts/build-offline.sh --code-only"
-    echo "  bash scripts/upload-spec-to-server.sh root 192.168.1.100 /opt/tianshu backend-code"
+    echo "  bash deploy/docker/build-offline.sh --code-only"
+    echo "  bash deploy/docker/upload-spec-to-server.sh root 192.168.1.100 /opt/tianshu backend-code"
     echo ""
 }
 
