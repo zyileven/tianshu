@@ -91,7 +91,7 @@ def docx_to_markdown(
             if rustfs_url:
                 result.append(f'<img src="{rustfs_url}" alt="{img_name}">')
             else:
-                result.append(f"![{img_name}]({local_path})")
+                result.append(f"![{img_name}](images/{img_name})")
         return result
 
     def _heading_prefix(para) -> str:
@@ -237,7 +237,7 @@ def pptx_to_markdown(
                 if rustfs_url:
                     slide_parts.append(f'<img src="{rustfs_url}" alt="{img_info["alt"]}">')
                 else:
-                    slide_parts.append(f'![{img_info["alt"]}]({local_path})')
+                    slide_parts.append(f'![{img_info["alt"]}](images/{img_name})')
                 continue
 
             # 文本框 / 占位符
@@ -363,7 +363,7 @@ def xlsx_to_markdown(
                     if rustfs_url:
                         sheet_image_tags.append(f'<img src="{rustfs_url}" alt="{img_name}">')
                     else:
-                        sheet_image_tags.append(f"![{img_name}]({local_path})")
+                        sheet_image_tags.append(f"![{img_name}](images/{img_name})")
                 except Exception as e:
                     logger.warning(f"⚠️  Failed to extract image from {ws.title}: {e}")
 
