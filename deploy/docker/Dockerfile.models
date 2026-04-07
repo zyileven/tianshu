@@ -1,0 +1,17 @@
+# Tianshu Models Image
+# 将离线模型打包为独立 Docker 镜像，用于镜像仓库部署
+#
+# 构建: docker build -f deploy/docker/Dockerfile.models -t tianshu-models:latest .
+# 推送: docker push registry.cn-xxx.aliyuncs.com/yourns/tianshu-models:latest
+
+FROM busybox:latest
+
+LABEL maintainer="Tianshu Team"
+LABEL description="Tianshu AI models (MinerU, SenseVoice, Paraformer, Watermark Detection)"
+
+# 复制模型文件到镜像内
+COPY models-offline/ /models-data/
+
+# 提供一个默认命令：将模型复制到共享卷
+# 使用 cp -a 保留文件属性，使用 -n 避免覆盖已存在的文件
+CMD ["sh", "-c", "echo 'Copying models to shared volume...' && cp -a /models-data/. /models-shared/ && echo 'Models ready.'"]

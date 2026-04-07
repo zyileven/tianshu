@@ -377,7 +377,158 @@ openssl rand -hex 32
 
 ---
 
-## 八、版本信息
+## 八、镜像仓库部署（推荐）
+
+> 将所有镜像（含模型）推送到阿里云 ACR 镜像仓库，服务器只需 `docker pull` + `docker-compose up`，无需手动传输文件。
+
+### 优势
+
+| | 离线包部署 | 镜像仓库部署 |
+|--|--|--|
+| 传输方式 | scp 上传 tar.gz | docker pull（断点续传） |
+| 模型更新 | 重新上传 13GB | docker pull 增量拉取 |
+| 代码更新 | 打包 + 上传 + 服务器 build | docker pull + restart |
+| 多机部署 | 每台都要传文件 | 每台直接 pull |
+
+### 镜像列表
+
+| 镜像 | 说明 | 大小 | 更新频率 |
+|------|------|------|----------|
+| `tianshu-backend` | 后端 API + Worker | ~16GB | 每次代码更新 |
+| `tianshu-frontend` | 前端 Vue + Nginx | ~55MB | 前端更新时 |
+| `tianshu-models` | AI 模型（独立镜像） | ~30GB | 模型更新时（很少） |
+| `rustfs` | 对象存储 | ~240MB | 几乎不更新 |
+
+### 1. 开发机：配置仓库凭据
+
+在项目根目录 `.env` 中配置（不要写到 `.env.example`，避免泄露）：
+
+```bash
+REGISTRY_PREFIX=registry.cn-chengdu.aliyuncs.com/tavan-ai
+REGISTRY_USERNAME=your_username
+REGISTRY_PASSWORD=your_password
+```
+
+### 2. 开发机：构建镜像
+
+构建和推送是**分开的两步操作**。
+
+```bash
+# 构建后端镜像（首次约 60-90 分钟）
+bash deploy/docker/build-offline.sh
+
+# 构建模型镜像（首次需要，约 10-20 分钟）
+bash deploy/docker/build-offline.sh --models-only
+```
+
+构建完成后，本地应有以下镜像：
+
+```bash
+docker images | grep -E "tianshu|rustfs"
+# tianshu-backend        latest    ...    ~16GB
+# tianshu-frontend       latest    ...    ~55MB
+# tianshu-models         latest    ...    ~30GB
+# rustfs/rustfs          latest    ...    ~240MB
+```
+
+### 3. 开发机：逐个推送镜像
+
+推送脚本自动从 `.env` 读取仓库账号密码并登录，每次只推送一个镜像：
+
+```bash
+# 推送后端
+bash deploy/docker/push-to-registry.sh backend
+
+# 推送前端
+bash deploy/docker/push-to-registry.sh frontend
+
+# 推送模型（首次，约 30GB）
+bash deploy/docker/push-to-registry.sh models
+
+# 推送 RustFS
+bash deploy/docker/push-to-registry.sh rustfs
+
+# 也可以指定版本标签
+bash deploy/docker/push-to-registry.sh backend --tag v1.0.0
+```
+
+### 4. 服务器：首次部署
+
+```bash
+# 登录镜像仓库
+docker login registry.cn-chengdu.aliyuncs.com
+
+# 创建部署目录
+mkdir -p /opt/tianshu && cd /opt/tianshu
+
+# 从开发机复制配置文件到此目录:
+#   - docker-compose.registry.yml
+#   - .env.example
+#   - mcp_config.example.json
+cp .env.example .env
+
+# 编辑 .env，设置:
+#   REGISTRY_PREFIX=registry.cn-chengdu.aliyuncs.com/tavan-ai
+#   RUSTFS_PUBLIC_URL=http://YOUR_SERVER_IP:9000
+#   JWT_SECRET_KEY=（用 openssl rand -hex 32 生成）
+
+# 创建数据目录
+mkdir -p data/{uploads,output,db} logs/{backend,worker,mcp,scheduler} models
+
+# 启动（首次会自动 pull 所有镜像 + 复制模型到共享卷）
+docker-compose -f docker-compose.registry.yml up -d
+```
+
+首次启动时 `models-init` 服务会将模型从镜像复制到共享卷（约 5-10 分钟），
+backend 和 worker 会等待其完成后再启动。后续重启不会重复复制。
+
+### 5. 日常更新
+
+**代码更新（开发机）：**
+
+```bash
+# 重新构建后端镜像
+bash deploy/docker/build-offline.sh
+
+# 推送
+bash deploy/docker/push-to-registry.sh backend
+```
+
+**代码更新（服务器）：**
+
+```bash
+cd /opt/tianshu
+docker-compose -f docker-compose.registry.yml pull backend worker
+docker-compose -f docker-compose.registry.yml up -d --no-deps backend worker scheduler mcp-server
+```
+
+**前端更新（同理）：**
+
+```bash
+# 开发机
+bash deploy/docker/push-to-registry.sh frontend
+
+# 服务器
+docker-compose -f docker-compose.registry.yml pull frontend
+docker-compose -f docker-compose.registry.yml up -d --no-deps frontend
+```
+
+**模型更新（很少需要）：**
+
+```bash
+# 开发机
+bash deploy/docker/build-offline.sh --models-only
+bash deploy/docker/push-to-registry.sh models
+
+# 服务器：需要删除旧的共享卷，重新初始化
+docker-compose -f docker-compose.registry.yml pull models-init
+docker volume rm tianshu-models-shared
+docker-compose -f docker-compose.registry.yml up -d
+```
+
+---
+
+## 九、版本信息
 
 - 平台：linux/amd64
 - CUDA：12.6.2 + cuDNN

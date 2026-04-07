@@ -5,6 +5,7 @@
 #   bash deploy/docker/build-offline.sh              # 全量构建（首次部署）
 #   bash deploy/docker/build-offline.sh --deps-only  # 仅构建依赖层（切换到增量更新流程时用一次）
 #   bash deploy/docker/build-offline.sh --code-only  # 仅打包代码（日常代码更新）
+#   bash deploy/docker/build-offline.sh --models-only # 仅构建模型镜像（用于镜像仓库部署）
 
 set -e
 
@@ -24,6 +25,7 @@ for arg in "$@"; do
     case "$arg" in
         --deps-only)   MODE="deps-only" ;;
         --code-only)   MODE="code-only" ;;
+        --models-only) MODE="models-only" ;;
         --full)        MODE="full" ;;
         --platform=*)  PLATFORM="${arg#*=}" ;;
         -h|--help)     MODE="help" ;;
@@ -57,6 +59,9 @@ show_usage() {
     echo ""
     echo "  --deps-only       仅构建依赖层，用于切换到增量更新流程（只需做一次）"
     echo "                    输出: docker-images/tianshu-backend-deps-amd64.tar.gz (~10GB)"
+    echo ""
+    echo "  --models-only     仅构建模型 Docker 镜像（用于镜像仓库部署）"
+    echo "                    输出: 本地镜像 tianshu-models:latest (~30GB)"
     echo ""
     echo "  --code-only       仅打包代码，用于日常代码更新（几 MB，几十秒）"
     echo "                    输出: docker-images/tianshu-backend-code-update.tar.gz (<10MB)"
@@ -301,6 +306,46 @@ build_deps_only() {
 }
 
 # ============================================================================
+# 仅构建模型镜像（用于镜像仓库部署）
+# ============================================================================
+build_models_only() {
+    log_info "=========================================="
+    log_info "🧠 Models-Only Build (Docker Image)"
+    log_info "=========================================="
+    echo ""
+
+    check_docker
+    echo ""
+
+    check_models
+    echo ""
+
+    log_info "📦 Building models Docker image..."
+    log_info "   This may take a while (~30GB)..."
+    echo ""
+
+    DOCKER_BUILDKIT=1 docker build \
+        --file "${ROOT_DIR}/deploy/docker/Dockerfile.models" \
+        --tag tianshu-models:latest \
+        "${ROOT_DIR}"
+
+    log_success "Models image built: tianshu-models:latest"
+    echo ""
+
+    docker images tianshu-models:latest
+    echo ""
+
+    log_info "=========================================="
+    log_success "✅ Models Image Build Complete!"
+    log_info "=========================================="
+    echo ""
+    log_info "📋 推送到镜像仓库:"
+    echo ""
+    echo "  bash deploy/docker/push-to-registry.sh models"
+    echo ""
+}
+
+# ============================================================================
 # 仅打包代码（日常代码更新）
 # ============================================================================
 build_code_only() {
@@ -412,6 +457,9 @@ case "$MODE" in
         ;;
     deps-only)
         build_deps_only
+        ;;
+    models-only)
+        build_models_only
         ;;
     code-only)
         build_code_only

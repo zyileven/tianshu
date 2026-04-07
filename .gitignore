@@ -58,6 +58,7 @@ data/
 *~
 
 docker-images
+docker-images2
 docker-images-cpu
 models-offline
 cpu-deployment
