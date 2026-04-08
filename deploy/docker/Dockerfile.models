@@ -4,7 +4,7 @@
 # 构建: docker build -f deploy/docker/Dockerfile.models -t tianshu-models:latest .
 # 推送: docker push registry.cn-xxx.aliyuncs.com/yourns/tianshu-models:latest
 
-FROM busybox:latest
+FROM --platform=linux/amd64 busybox:latest
 
 LABEL maintainer="Tianshu Team"
 LABEL description="Tianshu AI models (MinerU, SenseVoice, Paraformer, Watermark Detection)"

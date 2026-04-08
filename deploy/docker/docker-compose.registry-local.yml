@@ -133,6 +133,8 @@ services:
       # 模型下载配置（离线模式）
       - MODEL_DOWNLOAD_SOURCE=${MODEL_DOWNLOAD_SOURCE:-local}
       - HF_OFFLINE=1
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
       - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
       - HF_TOKEN=${HF_TOKEN:-}
 

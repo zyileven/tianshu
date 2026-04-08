@@ -324,9 +324,11 @@ build_models_only() {
     log_info "   This may take a while (~30GB)..."
     echo ""
 
-    DOCKER_BUILDKIT=1 docker build \
+    DOCKER_BUILDKIT=1 docker buildx build \
+        --platform linux/$PLATFORM \
         --file "${ROOT_DIR}/deploy/docker/Dockerfile.models" \
         --tag tianshu-models:latest \
+        --load \
         "${ROOT_DIR}"
 
     log_success "Models image built: tianshu-models:latest"
