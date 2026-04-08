@@ -1,0 +1,381 @@
+# Tianshu (天枢) - 基于镜像仓库部署（本地存储版）
+# 模型打包在 tianshu-models 镜像内，不使用 S3/RustFS，所有数据存储在 /data/tianshu/
+#
+# 使用方式:
+#   1. 复制 .env.example 为 .env 并配置（包括 REGISTRY_PREFIX、JWT_SECRET_KEY）
+#   2. 创建所需目录（见下方命令）
+#   3. 启动:
+#      docker-compose -f docker-compose.registry-local.yml up -d
+#   4. 查看日志: docker-compose -f docker-compose.registry-local.yml logs -f
+#   6. 停止: docker-compose -f docker-compose.registry-local.yml down
+#
+# 启动前创建所需目录:
+#   mkdir -p /data/tianshu/models-shared
+#   mkdir -p /data/tianshu/models/{paddlex_cache,huggingface_cache,modelscope_cache}
+#   mkdir -p /data/tianshu/{data/uploads,data/output,data/db}
+#   mkdir -p /data/tianshu/{logs/backend,logs/worker,logs/scheduler,logs/mcp}
+#   mkdir -p /data/tianshu/cache/{backend-root-cache,backend-paddleocr,worker-root-cache,worker-paddleocr,redis}
+#
+# 模型说明:
+#   - tianshu-models 镜像内含所有 AI 模型（MinerU、SenseVoice、Paraformer 等）
+#   - models-init 服务在首次启动时将模型复制到 /data/tianshu/models-shared/
+#   - 后续启动检测到标记文件后自动跳过，无需重复复制
+#
+# 前置要求:
+#   - Docker 20.10+
+#   - Docker Compose 2.0+
+#   - NVIDIA GPU + NVIDIA Driver 525+ + NVIDIA Container Toolkit
+#   - 已登录镜像仓库
+
+# 项目名称（避免使用目录名）
+name: tianshu
+
+services:
+  # models-init 已移除
+  # 模型文件通过以下方式手动提取到 /data/tianshu/models-shared/：
+  #   docker create --name temp-models <tianshu-models镜像>
+  #   docker cp temp-models:/models-data/. /data/tianshu/models-shared/
+  #   docker rm temp-models
+  #   date -Iseconds > /data/tianshu/models-shared/.models_copied
+
+  # ============================================================================
+  # Redis (高性能任务队列)
+  # ============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: tianshu-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - /data/tianshu/cache/redis:/data
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    environment:
+      - TZ=Asia/Shanghai
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - tianshu-network
+
+  # ============================================================================
+  # Backend API Server
+  # ============================================================================
+  backend:
+    image: ${REGISTRY_PREFIX:-registry.cn-hangzhou.aliyuncs.com/yourns}/tianshu-backend:${BACKEND_TAG:-latest}
+    container_name: tianshu-backend
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      # 模型原始文件（由 models-init 从镜像复制而来，只读）
+      - /data/tianshu/models-shared:/models-external:ro
+      # /root/.cache 父目录整体挂载（持久化标记文件 .models_initialized 和水印模型）
+      # 必须在子目录挂载之前，子目录挂载会自动覆盖此父目录挂载
+      - /data/tianshu/cache/backend-root-cache:/root/.cache:rw
+      # PaddleOCR 运行时缓存
+      - /data/tianshu/cache/backend-paddleocr:/root/.paddleocr:rw
+      # 应用模型目录及各框架运行时缓存（init-models.sh 从 /models-external 复制至此）
+      - /data/tianshu/models:/app/models:rw
+      - /data/tianshu/models/paddlex_cache:/root/.paddlex:rw
+      # 以下两项覆盖上方 /root/.cache 父目录挂载中对应的子目录
+      - /data/tianshu/models/huggingface_cache:/root/.cache/huggingface:rw
+      - /data/tianshu/models/modelscope_cache:/root/.cache/modelscope:rw
+      # 数据目录
+      - /data/tianshu/data/uploads:/app/data/uploads:rw
+      - /data/tianshu/data/output:/app/data/output:rw
+      - /data/tianshu/logs/backend:/app/logs:rw
+      - /data/tianshu/data/db:/app/data/db:rw
+      # 时区
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    environment:
+      # 时区设置
+      - TZ=Asia/Shanghai
+      # 应用配置
+      - HOST=0.0.0.0
+      - API_PORT=8000
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+      # JWT 认证
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+
+      # CORS 配置
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:80}
+
+      # GPU 配置
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+
+      # Worker 配置
+      - WORKER_URL=${WORKER_URL:-http://worker:8001}
+
+      # 文件限制（0 表示不限制）
+      - MAX_FILE_SIZE=${MAX_FILE_SIZE:-0}
+
+      # 路径配置
+      - MODEL_PATH=/app/models
+      - OUTPUT_PATH=/app/data/output
+      - UPLOAD_PATH=/app/data/uploads
+
+      # 数据库路径
+      - DATABASE_PATH=${DATABASE_PATH:-/app/data/db/mineru_tianshu.db}
+
+      # 禁用 RustFS，使用本地文件服务（图片通过 /v1/files/output/ 接口访问）
+      - RUSTFS_ENABLED=false
+
+      # 模型下载配置（离线模式）
+      - MODEL_DOWNLOAD_SOURCE=${MODEL_DOWNLOAD_SOURCE:-local}
+      - HF_OFFLINE=1
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+      - HF_TOKEN=${HF_TOKEN:-}
+
+      # Redis 队列配置（可选）
+      - REDIS_QUEUE_ENABLED=${REDIS_QUEUE_ENABLED:-false}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${GPU_COUNT:-1}
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - tianshu-network
+    depends_on:
+      worker:
+        condition: service_started
+      # redis 是可选依赖，不在 depends_on 中强制依赖
+
+  # ============================================================================
+  # LitServe Worker
+  # ============================================================================
+  worker:
+    image: ${REGISTRY_PREFIX:-registry.cn-hangzhou.aliyuncs.com/yourns}/tianshu-backend:${BACKEND_TAG:-latest}
+    container_name: tianshu-worker
+    restart: unless-stopped
+    command: ["worker", "python", "litserve_worker.py"]
+    ports:
+      - "${WORKER_PORT:-8001}:8001"
+    volumes:
+      # 模型原始文件（只读）
+      - /data/tianshu/models-shared:/models-external:ro
+      # /root/.cache 父目录整体挂载（持久化标记文件 .models_initialized 和水印模型）
+      # 必须在子目录挂载之前，子目录挂载会自动覆盖此父目录挂载
+      - /data/tianshu/cache/worker-root-cache:/root/.cache:rw
+      # PaddleOCR 运行时缓存
+      - /data/tianshu/cache/worker-paddleocr:/root/.paddleocr:rw
+      # 应用模型目录及各框架运行时缓存
+      - /data/tianshu/models:/app/models:rw
+      - /data/tianshu/models/paddlex_cache:/root/.paddlex:rw
+      # 以下两项覆盖上方 /root/.cache 父目录挂载中对应的子目录
+      - /data/tianshu/models/huggingface_cache:/root/.cache/huggingface:rw
+      - /data/tianshu/models/modelscope_cache:/root/.cache/modelscope:rw
+      # 数据目录（读写，需要创建 converted_pdfs 目录用于 Office 转 PDF）
+      - /data/tianshu/data/uploads:/app/data/uploads:rw
+      - /data/tianshu/data/output:/app/data/output:rw
+      - /data/tianshu/logs/worker:/app/logs:rw
+      # 数据库（读写，需要更新任务状态）
+      - /data/tianshu/data/db:/app/data/db:rw
+      # 时区
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    environment:
+      # 时区设置
+      - TZ=Asia/Shanghai
+      # 应用配置
+      - HOST=0.0.0.0
+      - WORKER_PORT=8001
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+      # GPU 配置
+      # 注意：不设置 CUDA_VISIBLE_DEVICES，让容器自然看到所有 GPU
+      # Python 代码会自动检测并使用所有可用的 GPU
+      - WORKER_GPUS=${WORKER_GPUS:-1}  # 每个 GPU 的 worker 数量（单卡建议设为 1）
+
+      # 路径配置
+      - MODEL_PATH=/app/models
+      - OUTPUT_PATH=/app/data/output
+      - UPLOAD_PATH=/app/data/uploads
+
+      # 数据库路径（必须与 backend 一致）
+      - DATABASE_PATH=${DATABASE_PATH:-/app/data/db/mineru_tianshu.db}
+
+      # Worker 配置
+      - MAX_BATCH_SIZE=${MAX_BATCH_SIZE:-4}
+      - TIMEOUT=${WORKER_TIMEOUT:-300}
+
+      # 模型下载配置（魔搭社区）
+      - MODEL_DOWNLOAD_SOURCE=${MODEL_DOWNLOAD_SOURCE:-modelscope}
+      - HF_OFFLINE=${HF_OFFLINE:-0}
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+      - HF_TOKEN=${HF_TOKEN:-}
+
+      # 网络代理（用于容器内下载模型）
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - http_proxy=${http_proxy:-}
+      - https_proxy=${https_proxy:-}
+      - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1,redis,worker,backend,scheduler}
+
+      # PDF 拆分配置（Worker 中执行）
+      - PDF_SPLIT_ENABLED=${PDF_SPLIT_ENABLED:-true}
+      - PDF_SPLIT_THRESHOLD_PAGES=${PDF_SPLIT_THRESHOLD_PAGES:-500}
+      - PDF_SPLIT_CHUNK_SIZE=${PDF_SPLIT_CHUNK_SIZE:-250}
+      # 文件大小阈值（MB），超过此值强制分割以防 OOM
+      - PDF_SPLIT_SIZE_MB=${PDF_SPLIT_SIZE_MB:-20}
+
+      # 禁用 RustFS，使用本地文件服务
+      - RUSTFS_ENABLED=false
+
+      # Redis 队列配置（可选）
+      - REDIS_QUEUE_ENABLED=${REDIS_QUEUE_ENABLED:-false}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    deploy:
+      resources:
+        limits:
+          # 内存硬限制
+          memory: ${WORKER_MEMORY_LIMIT:-32G}
+        reservations:
+          # 内存软限制
+          memory: ${WORKER_MEMORY_RESERVATION:-16G}
+          devices:
+            - driver: nvidia
+              count: ${GPU_COUNT:-1}
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    networks:
+      - tianshu-network
+    # redis 是可选依赖，不在 depends_on 中强制依赖
+
+  # ============================================================================
+  # Task Scheduler
+  # ============================================================================
+  scheduler:
+    image: ${REGISTRY_PREFIX:-registry.cn-hangzhou.aliyuncs.com/yourns}/tianshu-backend:${BACKEND_TAG:-latest}
+    container_name: tianshu-scheduler
+    restart: unless-stopped
+    command: ["scheduler", "python", "task_scheduler.py",
+      "--litserve-url", "http://worker:8001/predict",
+      "--monitor-interval", "60",
+      "--stale-task-timeout", "30",
+      "--cleanup-old-files-days", "${CLEANUP_OLD_FILES_DAYS:-7}",
+      "--wait-for-workers"]
+    volumes:
+      - /data/tianshu/data/db:/app/data/db:rw
+      - /data/tianshu/data/output:/app/data/output:rw
+      - /data/tianshu/logs/scheduler:/app/logs:rw
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    environment:
+      - TZ=Asia/Shanghai
+      - DATABASE_PATH=${DATABASE_PATH:-/app/data/db/mineru_tianshu.db}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Redis 队列配置（必须与 worker 保持一致）
+      - REDIS_QUEUE_ENABLED=${REDIS_QUEUE_ENABLED:-false}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    networks:
+      - tianshu-network
+    depends_on:
+      - worker
+      - backend
+
+  # ============================================================================
+  # MCP Server (Model Context Protocol) - 可选
+  # ============================================================================
+  mcp-server:
+    image: ${REGISTRY_PREFIX:-registry.cn-hangzhou.aliyuncs.com/yourns}/tianshu-backend:${BACKEND_TAG:-latest}
+    container_name: tianshu-mcp
+    restart: unless-stopped
+    command: ["mcp", "python", "mcp_server.py"]
+    ports:
+      - "${MCP_PORT:-8002}:8002"
+    volumes:
+      # 配置文件
+      - /data/tianshu/mcp_config.json:/app/backend/mcp_config.json:ro
+      # 日志
+      - /data/tianshu/logs/mcp:/app/logs:rw
+      # 时区
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    environment:
+      - TZ=Asia/Shanghai
+      - HOST=0.0.0.0
+      - MCP_PORT=8002
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - API_URL=${API_URL:-http://backend:8000}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - tianshu-network
+    depends_on:
+      - backend
+
+  # ============================================================================
+  # Frontend (Vue 3 + Nginx)
+  # ============================================================================
+  frontend:
+    image: ${REGISTRY_PREFIX:-registry.cn-hangzhou.aliyuncs.com/yourns}/tianshu-frontend:${FRONTEND_TAG:-latest}
+    container_name: tianshu-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    volumes:
+      # 时区
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    environment:
+      - TZ=Asia/Shanghai
+      - VITE_API_BASE_URL=${VITE_API_BASE_URL:-http://localhost:8000}
+      # Nginx 文件上传大小限制（0 表示不限制）
+      - NGINX_CLIENT_MAX_BODY_SIZE=${NGINX_CLIENT_MAX_BODY_SIZE:-0}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    networks:
+      - tianshu-network
+    depends_on:
+      - backend
+
+networks:
+  tianshu-network:
+    driver: bridge
+    name: tianshu-network
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.30.0.0/16
+          gateway: 172.30.0.1
