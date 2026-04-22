@@ -141,9 +141,9 @@ if ! docker image inspect "$LOCAL_IMAGE" &> /dev/null; then
     log_error "Local image not found: $LOCAL_IMAGE"
     log_info "Please build it first:"
     case "$IMAGE_TYPE" in
-        backend)  log_info "  bash deploy/docker/build-offline.sh" ;;
-        frontend) log_info "  bash deploy/docker/build-offline.sh" ;;
-        models)   log_info "  bash deploy/docker/build-offline.sh --models-only" ;;
+        backend)  log_info "  bash deploy/docker/build.sh --backend-only" ;;
+        frontend) log_info "  bash deploy/docker/build.sh --frontend-only" ;;
+        models)   log_info "  bash deploy/docker/build.sh --models-only" ;;
         rustfs)   log_info "  docker pull rustfs/rustfs:latest" ;;
     esac
     exit 1
