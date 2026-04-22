@@ -149,6 +149,9 @@ http://YOUR_SERVER_IP
 ```bash
 bash deploy/docker/build.sh --backend-only
 bash deploy/docker/push-to-registry.sh backend
+
+# 也可以同时打版本标签，方便回滚
+bash deploy/docker/push-to-registry.sh backend --tag v1.2.0
 ```
 
 服务器：
@@ -156,6 +159,8 @@ bash deploy/docker/push-to-registry.sh backend
 cd /opt/tianshu
 docker-compose -f docker-compose.registry.yml pull backend worker
 docker-compose -f docker-compose.registry.yml up -d --no-deps backend worker scheduler mcp-server
+
+# 如需回滚到指定版本，修改 .env 中 BACKEND_TAG=v1.2.0，然后重新 pull + up
 ```
 
 ### 前端更新
@@ -164,6 +169,9 @@ docker-compose -f docker-compose.registry.yml up -d --no-deps backend worker sch
 ```bash
 bash deploy/docker/build.sh --frontend-only
 bash deploy/docker/push-to-registry.sh frontend
+
+# 带版本标签
+bash deploy/docker/push-to-registry.sh frontend --tag v1.2.0
 ```
 
 服务器：

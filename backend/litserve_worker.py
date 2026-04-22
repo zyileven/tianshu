@@ -1019,9 +1019,12 @@ class MinerUWorkerAPI(ls.LitAPI):
                 shutil.copy2(input_file, temp_input)
 
                 # 在临时目录执行转换
+                # 使用独立的 UserInstallation 避免多 worker 并发时 LibreOffice profile 锁冲突
+                user_install = f"file://{temp_dir_path}/libreoffice_profile"
                 cmd = [
                     "libreoffice",
                     "--headless",  # 无界面模式
+                    f"-env:UserInstallation={user_install}",
                     "--convert-to",
                     "pdf",  # 转换为 PDF
                     "--outdir",
