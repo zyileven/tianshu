@@ -1029,8 +1029,8 @@ class MinerUWorkerAPI(ls.LitAPI):
                     str(temp_input),  # 输入文件
                 ]
 
-                # 执行转换（超时 120 秒）
-                result = subprocess.run(cmd, check=True, timeout=120, capture_output=True, text=True)
+                # 执行转换（超时 600 秒，支持最多约 500 页的大文件）
+                result = subprocess.run(cmd, check=True, timeout=600, capture_output=True, text=True)
 
                 # 临时输出文件路径
                 temp_pdf = temp_dir_path / f"{input_file.stem}.pdf"
@@ -1052,7 +1052,7 @@ class MinerUWorkerAPI(ls.LitAPI):
                 return str(final_pdf_file)
 
         except subprocess.TimeoutExpired:
-            raise RuntimeError(f"LibreOffice conversion timeout (>120s): {input_file.name}")
+            raise RuntimeError(f"LibreOffice conversion timeout (>600s): {input_file.name}")
         except subprocess.CalledProcessError as e:
             stderr_output = e.stderr if e.stderr else "No error output"
             raise RuntimeError(f"LibreOffice conversion failed: {stderr_output}")
