@@ -667,31 +667,90 @@ class TaskDB:
 
         Worker ID 格式: tianshu-{hostname}-{device}-{pid}
         重启后 PID 变化，旧实例的任务会永远卡在 processing。
-        本方法通过前缀匹配（hostname+device 相同）找到旧实例遗留任务并立即重置，
-        不依赖时间窗口，确保 Worker 重启后立刻恢复。
+        本方法通过前缀匹配（hostname+device 相同）找到候选任务，
+        再用 PID 存活检测过滤出真正已死亡 worker 的任务，
+        避免误伤同设备上并行运行的兄弟 worker 的在途任务。
 
         Args:
             worker_id_prefix: 当前设备的前缀，如 "tianshu-cb3e2d3f2604-cuda:0"
             current_worker_id: 当前 Worker 自身 ID，排除在外避免重置自己的任务
         """
+        import os as _os
+
         with self.get_cursor() as cursor:
+            # 先取候选：前缀匹配、非自身、且仍在 processing
             cursor.execute(
                 """
+                SELECT task_id, worker_id FROM tasks
+                WHERE status = 'processing'
+                  AND worker_id LIKE ? || '-%'
+                  AND worker_id != ?
+                """,
+                (worker_id_prefix, current_worker_id),
+            )
+            candidates = cursor.fetchall()
+
+            dead_task_ids: list = []
+            alive_skipped = 0
+            unparsable = 0
+            for row in candidates:
+                wid = row["worker_id"] or ""
+                # 从尾部解析 PID（格式: tianshu-{hostname}-{device}-{pid}）
+                try:
+                    pid = int(wid.rsplit("-", 1)[-1])
+                except (ValueError, IndexError):
+                    # 无法解析 PID：保守起见当作遗留任务一起重置
+                    dead_task_ids.append(row["task_id"])
+                    unparsable += 1
+                    continue
+
+                # 前缀已限定 hostname，所有候选都在本机 → os.kill(pid, 0) 可用
+                try:
+                    _os.kill(pid, 0)
+                    # 进程存在 → 兄弟 worker 的活任务，跳过
+                    alive_skipped += 1
+                except ProcessLookupError:
+                    # 进程已不存在 → 真正遗留的死任务
+                    dead_task_ids.append(row["task_id"])
+                except PermissionError:
+                    # 进程存在但属于其他用户（通常不会发生于容器内）→ 保守跳过
+                    alive_skipped += 1
+                except Exception:
+                    # 任何其它异常 → 保守跳过，交给 reset_stale_tasks 兜底
+                    alive_skipped += 1
+
+            if not dead_task_ids:
+                if alive_skipped > 0:
+                    logger.info(
+                        f"✅ Dead-worker recovery: skipped {alive_skipped} tasks "
+                        f"belonging to live sibling workers under '{worker_id_prefix}'"
+                    )
+                return 0
+
+            # 用具体 task_id 做 UPDATE，避免再次条件扫描时误伤刚启动的兄弟 worker
+            placeholders = ",".join("?" * len(dead_task_ids))
+            cursor.execute(
+                f"""
                 UPDATE tasks
                 SET status = 'pending',
                     worker_id = NULL,
                     retry_count = retry_count + 1
-                WHERE status = 'processing'
-                  AND worker_id LIKE ? || '-%'
-                  AND worker_id != ?
-            """,
-                (worker_id_prefix, current_worker_id),
+                WHERE task_id IN ({placeholders})
+                  AND status = 'processing'
+                """,
+                dead_task_ids,
             )
             reset_count = cursor.rowcount
             if reset_count > 0:
+                extras = []
+                if alive_skipped:
+                    extras.append(f"skipped {alive_skipped} live sibling tasks")
+                if unparsable:
+                    extras.append(f"{unparsable} unparsable worker_ids reset")
+                suffix = f" ({', '.join(extras)})" if extras else ""
                 logger.warning(
                     f"🔄 Dead worker recovery: reset {reset_count} tasks "
-                    f"from previous instances of '{worker_id_prefix}'"
+                    f"from previous instances of '{worker_id_prefix}'{suffix}"
                 )
             return reset_count
 

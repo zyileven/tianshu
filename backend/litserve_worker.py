@@ -295,8 +295,22 @@ class MinerUWorkerAPI(ls.LitAPI):
                 try:
                     # 注意：get_vram 需要传入设备字符串（如 "cuda:0"）
                     vram = round(get_vram(device_mode))
-                    os.environ["MINERU_VIRTUAL_VRAM_SIZE"] = str(vram)
-                    logger.info(f"🎮 [MinerU VRAM] Detected: {vram}GB")
+                    # 多 worker 共享同一张卡时按比例均分，否则每个 worker 都按整卡显存
+                    # 申报会叠加配额 → batch_ratio 过大 → 并发 OOM
+                    try:
+                        workers_per_device = max(1, int(os.environ.get("WORKER_GPUS", "1")))
+                    except ValueError:
+                        workers_per_device = 1
+                    vram_per_worker = max(1, vram // workers_per_device)
+                    os.environ["MINERU_VIRTUAL_VRAM_SIZE"] = str(vram_per_worker)
+                    if workers_per_device > 1:
+                        logger.info(
+                            f"🎮 [MinerU VRAM] GPU total: {vram}GB, "
+                            f"workers_per_device={workers_per_device} → "
+                            f"per-worker allocation: {vram_per_worker}GB"
+                        )
+                    else:
+                        logger.info(f"🎮 [MinerU VRAM] Detected: {vram}GB")
                 except Exception as e:
                     os.environ["MINERU_VIRTUAL_VRAM_SIZE"] = "8"  # 默认值
                     logger.warning(f"⚠️  Failed to detect VRAM, using default: 8GB ({e})")
@@ -1794,6 +1808,10 @@ def start_litserve_workers(
         logger.info("PaddleOCR VL VLLM 引擎已禁用")
 
     logger.info("=" * 60)
+
+    # 将 workers_per_device 写回环境变量，保证 LitServe fork 出的 worker 子进程
+    # 在 setup() 里能读到一致的值（用于 VRAM 均分等逻辑）
+    os.environ["WORKER_GPUS"] = str(workers_per_device)
 
     # 1. 实例化 API 时传入数据
     api = MinerUWorkerAPI(
